@@ -1,0 +1,108 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg-main: #060911;
+  --bg-card: rgba(13, 20, 36, 0.75);
+  --gold: #e6ca65;
+  --gold-glow: rgba(230, 202, 101, 0.3);
+  --blue-neon: #3b82f6;
+  --blue-glow: rgba(59, 130, 246, 0.45);
+}
+
+body {
+  background-color: #060911;
+  color: #f1f5f9;
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  overflow-x: hidden;
+  min-height: 100vh;
+}
+
+/* Glassmorphism */
+.glass-panel {
+  background: rgba(13, 20, 36, 0.72);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.glass-panel-elevated {
+  background: rgba(18, 27, 49, 0.85);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow: 0 20px 40px -15px rgba(0, 0, 0, 0.7);
+}
+
+.glow-blue {
+  box-shadow: 0 0 30px -5px rgba(59, 130, 246, 0.45), 0 0 10px rgba(59, 130, 246, 0.2);
+}
+
+.glow-gold {
+  box-shadow: 0 0 30px -5px rgba(230, 202, 101, 0.4), 0 0 10px rgba(230, 202, 101, 0.2);
+}
+
+/* Boarding pass ticket punch-out notches */
+.ticket-notch-left {
+  position: absolute;
+  left: -14px;
+  width: 28px;
+  height: 28px;
+  border-radius: 9999px;
+  background-color: #060911;
+  box-shadow: inset -2px 0 4px rgba(0, 0, 0, 0.5);
+}
+
+.ticket-notch-right {
+  position: absolute;
+  right: -14px;
+  width: 28px;
+  height: 28px;
+  border-radius: 9999px;
+  background-color: #060911;
+  box-shadow: inset 2px 0 4px rgba(0, 0, 0, 0.5);
+}
+
+/* Scanner beam animation */
+@keyframes scanLaser {
+  0% {
+    top: 5%;
+    opacity: 0.8;
+  }
+  50% {
+    top: 90%;
+    opacity: 1;
+  }
+  100% {
+    top: 5%;
+    opacity: 0.8;
+  }
+}
+
+.scanner-laser {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, #22c55e, #4ade80, #22c55e, transparent);
+  box-shadow: 0 0 15px #22c55e, 0 0 8px #4ade80;
+  animation: scanLaser 2.2s infinite ease-in-out;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: #090d16;
+}
+::-webkit-scrollbar-thumb {
+  background: #1e293b;
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #334155;
+}
+

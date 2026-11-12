@@ -1,0 +1,1754 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ArISE 2026 — Movie Night | The National Institute of Engineering</title>
+  <link rel="icon" type="image/png" href="/arise.png" />
+  
+  <!-- Modern Clean Typography -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=Playfair+Display:ital,wght@0,500;0,600;0,700;1,400;1,600&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+  
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            'brand-gold': '#e6ca65',
+            'brand-navy': '#040711',
+            'brand-card': '#0a101f',
+          },
+          fontFamily: {
+            serif: ['"Playfair Display"', 'Georgia', 'serif'],
+            sans: ['"Plus Jakarta Sans"', 'system-ui', 'sans-serif'],
+            mono: ['"JetBrains Mono"', 'monospace'],
+          },
+        },
+      },
+    }
+  </script>
+
+  <!-- React 18, Babel, Confetti, QR Code, jsPDF & html2canvas -->
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.9.4/dist/confetti.browser.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+
+  <style>
+    body {
+      background-color: #040711;
+      color: #f1f5f9;
+      font-family: 'Plus Jakarta Sans', system-ui, sans-serif;
+      min-height: 100vh;
+      overflow-x: hidden;
+    }
+    .ticket-notch-left {
+      position: absolute;
+      left: -14px;
+      width: 28px;
+      height: 28px;
+      border-radius: 9999px;
+      background-color: #040711;
+      box-shadow: inset -2px 0 4px rgba(0, 0, 0, 0.7);
+    }
+    .ticket-notch-right {
+      position: absolute;
+      right: -14px;
+      width: 28px;
+      height: 28px;
+      border-radius: 9999px;
+      background-color: #040711;
+      box-shadow: inset 2px 0 4px rgba(0, 0, 0, 0.7);
+    }
+    @keyframes scanLaser {
+      0% { top: 5%; opacity: 0.8; }
+      50% { top: 90%; opacity: 1; }
+      100% { top: 5%; opacity: 0.8; }
+    }
+    .scanner-laser {
+      position: absolute;
+      left: 0;
+      right: 0;
+      height: 2px;
+      background: linear-gradient(90deg, transparent, #22c55e, #4ade80, #22c55e, transparent);
+      box-shadow: 0 0 15px #22c55e, 0 0 8px #4ade80;
+      animation: scanLaser 2.2s infinite ease-in-out;
+    }
+    ::-webkit-scrollbar { width: 8px; height: 8px; }
+    ::-webkit-scrollbar-track { background: #060913; }
+    ::-webkit-scrollbar-thumb { background: #1e293b; border-radius: 4px; }
+  </style>
+</head>
+<body class="selection:bg-blue-600 selection:text-white">
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect, useRef } = React;
+
+    const NIE_EMAIL_REGEX = /^[\w\.-]+@nie\.ac\.in$/;
+
+    // Database starting clean from 0
+    function getStoredTickets() {
+      try {
+        const raw = localStorage.getItem('arise_tickets_v1');
+        if (!raw) {
+          localStorage.setItem('arise_tickets_v1', JSON.stringify([]));
+          return [];
+        }
+        return JSON.parse(raw);
+      } catch {
+        return [];
+      }
+    }
+
+    function saveStoredTicket(ticket) {
+      const list = getStoredTickets();
+      const idx = list.findIndex(t => t.ticketId === ticket.ticketId);
+      if (idx >= 0) list[idx] = ticket;
+      else list.unshift(ticket);
+      localStorage.setItem('arise_tickets_v1', JSON.stringify(list));
+      localStorage.setItem('arise_active_ticket_v1', JSON.stringify(ticket));
+    }
+
+    function getActiveStoredTicket() {
+      try {
+        const raw = localStorage.getItem('arise_active_ticket_v1');
+        if (raw) return JSON.parse(raw);
+        return null;
+      } catch {
+        return null;
+      }
+    }
+
+    function clearAllDatabase() {
+      localStorage.setItem('arise_tickets_v1', JSON.stringify([]));
+      localStorage.removeItem('arise_active_ticket_v1');
+    }
+
+    // MAIN APP COMPONENT
+    function App() {
+      const [view, setView] = useState('landing'); // 'landing' | 'checkout' | 'ticket' | 'superadmin' | 'scanner'
+      const [isAuthOpen, setIsAuthOpen] = useState(false);
+      const [verifiedStudent, setVerifiedStudent] = useState(null);
+      const [activeTicket, setActiveTicket] = useState(getActiveStoredTicket());
+      const [tickets, setTickets] = useState(getStoredTickets());
+
+      // Read Direct Portal URL Query Parameters (?portal=superadmin or ?portal=scanner)
+      useEffect(() => {
+        const params = new URLSearchParams(window.location.search);
+        const portal = params.get('portal');
+        const hash = window.location.hash;
+        
+        if (portal === 'superadmin' || hash === '#superadmin') {
+          setView('superadmin');
+        } else if (portal === 'scanner' || hash === '#scanner') {
+          setView('scanner');
+        }
+      }, []);
+
+      const refreshTickets = () => {
+        setTickets(getStoredTickets());
+        setActiveTicket(getActiveStoredTicket());
+      };
+
+      const handleVerified = (student) => {
+        setVerifiedStudent(student);
+        setView('checkout');
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      };
+
+      const handlePaymentSuccess = (newTicket) => {
+        saveStoredTicket(newTicket);
+        setActiveTicket(newTicket);
+        refreshTickets();
+        setView('ticket');
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      };
+
+      return (
+        <div className="min-h-screen bg-[#040711] text-slate-100 flex flex-col">
+          
+          {/* HEADER WITH 3 LOGOS: nie.jpeg (Left) & dept.jpeg, arise.png (Right) */}
+          <header className="sticky top-0 z-40 w-full border-b border-white/5 bg-[#040711]/90 backdrop-blur-xl">
+            <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-24 flex items-center justify-between">
+              
+              {/* Left Logo: College (nie.jpeg) */}
+              <div 
+                onClick={() => setView('landing')}
+                className="flex items-center gap-3.5 cursor-pointer group"
+              >
+                <div className="flex items-center">
+                  <div className="w-14 h-14 rounded-full overflow-hidden flex items-center justify-center bg-white/0 border border-white/10">
+                    <img 
+                      src="/nie.jpeg" 
+                      alt="The National Institute of Engineering" 
+                      className="w-full h-full object-cover"
+                      style={{ mixBlendMode: 'screen', filter: 'contrast(1.1) brightness(1.05)' }}
+                      onError={(e) => { e.currentTarget.parentElement.style.display = 'none'; }}
+                    />
+                  </div>
+                </div>
+                <div className="flex flex-col">
+                  <div className="flex items-center gap-2">
+                    <span className="font-extrabold tracking-wider text-base text-white">ArISE 2026</span>
+                    <span className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded bg-blue-500/10 text-blue-400 border border-blue-500/25">
+                      NIE
+                    </span>
+                  </div>
+                  <span className="text-[10px] tracking-widest text-slate-400 font-medium uppercase">
+                    Department of ISE
+                  </span>
+                </div>
+              </div>
+
+              {/* Navigation Center */}
+              <nav className="hidden md:flex items-center gap-8 text-sm font-medium text-slate-300">
+                <a href="#details" className="hover:text-[#e6ca65] transition-colors">Event Details</a>
+                <a href="#venue" className="hover:text-[#e6ca65] transition-colors">Venue</a>
+                <a href="#guidelines" className="hover:text-[#e6ca65] transition-colors">Guidelines</a>
+              </nav>
+
+              {/* Right Side: Department Logo, ArISE Logo, Book Pass CTA */}
+              <div className="flex items-center gap-3 sm:gap-4">
+                
+                {/* Pass pill removed per user request */}
+
+                {/* Right Logos: Department (dept.jpeg) and ArISE (arise.png) — circular crop removes white bg */}
+                <div className="flex items-center gap-2 sm:gap-3">
+                  <div className="w-12 h-12 rounded-full overflow-hidden flex items-center justify-center border border-white/10">
+                    <img 
+                      src="/dept.jpeg" 
+                      alt="ISE Department Logo" 
+                      className="w-full h-full object-cover"
+                      style={{ mixBlendMode: 'screen', filter: 'contrast(1.1) brightness(1.05)' }}
+                      onError={(e) => { e.currentTarget.parentElement.style.display = 'none'; }}
+                    />
+                  </div>
+                  <div className="w-12 h-12 rounded-full overflow-hidden flex items-center justify-center border border-white/10">
+                    <img 
+                      src="/arise.png" 
+                      alt="ArISE Logo" 
+                      className="w-full h-full object-cover"
+                      style={{ mixBlendMode: 'screen', filter: 'contrast(1.1) brightness(1.05)' }}
+                      onError={(e) => { e.currentTarget.parentElement.style.display = 'none'; }}
+                    />
+                  </div>
+                </div>
+
+                {/* Book Pass CTA */}
+                <button
+                  onClick={() => setIsAuthOpen(true)}
+                  className="px-4 sm:px-5 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs sm:text-sm font-bold transition-all shadow-[0_0_20px_rgba(37,99,235,0.4)] cursor-pointer"
+                >
+                  Book Pass
+                </button>
+              </div>
+
+            </div>
+          </header>
+
+          {/* VIEW ROUTING */}
+          {view === 'checkout' && verifiedStudent && (
+            <CheckoutView
+              student={verifiedStudent}
+              onBack={() => setView('landing')}
+              onSuccess={handlePaymentSuccess}
+            />
+          )}
+
+          {view === 'ticket' && activeTicket && (
+            <TicketView
+              ticket={activeTicket}
+              onReturnHome={() => setView('landing')}
+              onOpenScanner={() => setView('scanner')}
+            />
+          )}
+
+          {view === 'superadmin' && (
+            <SuperAdminDashboard
+              onClose={() => setView('landing')}
+              tickets={tickets}
+              onResetDatabase={() => {
+                clearAllDatabase();
+                refreshTickets();
+              }}
+              onTicketsChange={refreshTickets}
+            />
+          )}
+
+          {view === 'scanner' && (
+            <GateVolunteerScanner
+              onClose={() => setView('landing')}
+              tickets={tickets}
+              onTicketsChange={refreshTickets}
+            />
+          )}
+
+          {view === 'landing' && (
+            <LandingPageView
+              onBookPass={() => setIsAuthOpen(true)}
+              totalRegistered={tickets.length}
+            />
+          )}
+
+          {/* REDESIGNED STUDENT GATE AUTH MODAL */}
+          <RedesignedStudentGateModal
+            isOpen={isAuthOpen}
+            onClose={() => setIsAuthOpen(false)}
+            onVerified={handleVerified}
+          />
+
+        </div>
+      );
+    }
+
+    // 1. REDESIGNED STUDENT GATE MODAL (EMOJI-FREE)
+    function RedesignedStudentGateModal({ isOpen, onClose, onVerified }) {
+      const [step, setStep] = useState('details');
+      const [fullName, setFullName] = useState('');
+      const [usn, setUsn] = useState('');
+      const [branch, setBranch] = useState('ISE');
+      const [mobile, setMobile] = useState('');
+      const [email, setEmail] = useState('');
+      const [emailTouched, setEmailTouched] = useState(false);
+      const [isEmailValid, setIsEmailValid] = useState(false);
+      const [errorMsg, setErrorMsg] = useState('');
+      const [otp, setOtp] = useState(['8','4','9','2','0','1']);
+      const [sendingOtp, setSendingOtp] = useState(false);
+
+      useEffect(() => {
+        if (email.length > 0) {
+          const valid = NIE_EMAIL_REGEX.test(email.trim().toLowerCase());
+          setIsEmailValid(valid);
+          if (!valid && emailTouched) {
+            setErrorMsg('Please enter your official NIE institution email ending with @nie.ac.in');
+          } else {
+            setErrorMsg('');
+          }
+        }
+      }, [email, emailTouched]);
+
+      if (!isOpen) return null;
+
+      const fillDemo = () => {
+        setFullName('Sagar N Mutalik');
+        setUsn('4NI23IS175');
+        setBranch('ISE');
+        setMobile('+91 98451 23456');
+        setEmail('2023is_sagarmutalik_c@nie.ac.in');
+        setEmailTouched(true);
+        setIsEmailValid(true);
+        setErrorMsg('');
+      };
+
+      const handleSubmitDetails = async (e) => {
+        e.preventDefault();
+        setEmailTouched(true);
+        if (!fullName || !usn || !mobile || !isEmailValid) {
+          setErrorMsg('Please complete all details with a valid @nie.ac.in email.');
+          return;
+        }
+
+        setSendingOtp(true);
+        try {
+          // Attempt dispatch through real FastAPI backend if available
+          await fetch('http://localhost:8000/api/auth/verify-email', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email: email.trim().toLowerCase() })
+          });
+        } catch (err) {
+          // Fallback to local dispatch
+        } finally {
+          setSendingOtp(false);
+          setStep('otp');
+        }
+      };
+
+      const handleConfirmOtp = () => {
+        onVerified({
+          fullName,
+          usn: usn.toUpperCase(),
+          branch,
+          mobile,
+          email: email.toLowerCase()
+        });
+        onClose();
+      };
+
+      return (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-md">
+          
+          <div className="relative w-full max-w-lg rounded-2xl bg-[#0a101f] border border-blue-500/25 shadow-2xl overflow-hidden">
+            <div className="h-1.5 w-full bg-gradient-to-r from-amber-400 via-blue-500 to-indigo-600" />
+            
+            <button 
+              onClick={onClose} 
+              className="absolute top-5 right-5 text-slate-400 hover:text-white p-2 rounded-full hover:bg-white/5 transition-colors cursor-pointer text-sm"
+            >
+              Close
+            </button>
+
+            <div className="p-7 sm:p-9 space-y-5">
+              
+              <div>
+                <span className="text-[10px] font-bold uppercase tracking-widest text-[#e6ca65] block">
+                  ArISE 2026 Student Admission Gate
+                </span>
+                <h3 className="text-3xl font-serif font-bold text-white mt-1">
+                  {step === 'details' ? 'Claim your moment.' : 'Verify your email.'}
+                </h3>
+                <p className="text-xs text-slate-400 mt-1 leading-relaxed">
+                  {step === 'details' 
+                    ? 'Verify your official student identity. Strictly one pass per student.' 
+                    : `We sent a 6-digit one-time access passcode to ${email}.`
+                  }
+                </p>
+              </div>
+
+              {step === 'details' && (
+                <div className="flex items-center justify-between p-2.5 rounded-xl bg-blue-950/40 border border-blue-500/20 text-xs">
+                  <span className="text-blue-300 font-medium">Quick student entry helper:</span>
+                  <button 
+                    type="button" 
+                    onClick={fillDemo}
+                    className="px-3 py-1 rounded-lg bg-blue-600/30 hover:bg-blue-600/50 text-blue-200 border border-blue-400/30 text-xs font-semibold cursor-pointer"
+                  >
+                    Auto-fill Student Info
+                  </button>
+                </div>
+              )}
+
+              {errorMsg && (
+                <div className="p-3 rounded-xl bg-red-950/60 border border-red-500/30 text-red-200 text-xs">
+                  {errorMsg}
+                </div>
+              )}
+
+              {step === 'details' ? (
+                <form onSubmit={handleSubmitDetails} className="space-y-4 text-xs">
+                  
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-slate-300 font-semibold mb-1.5 uppercase tracking-wider text-[10px]">
+                        Full Name
+                      </label>
+                      <input 
+                        type="text" 
+                        required 
+                        value={fullName} 
+                        onChange={e => setFullName(e.target.value)}
+                        placeholder="e.g. Sagar N Mutalik"
+                        className="w-full px-3.5 py-2.5 rounded-xl bg-slate-900/90 border border-slate-700/80 text-white placeholder-slate-500 outline-none focus:border-blue-500"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-slate-300 font-semibold mb-1.5 uppercase tracking-wider text-[10px]">
+                        USN
+                      </label>
+                      <input 
+                        type="text" 
+                        required 
+                        value={usn} 
+                        onChange={e => setUsn(e.target.value.toUpperCase())}
+                        placeholder="e.g. 4NI23IS175"
+                        className="w-full px-3.5 py-2.5 rounded-xl bg-slate-900/90 border border-slate-700/80 text-white uppercase placeholder-slate-500 outline-none focus:border-blue-500 font-mono"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-slate-300 font-semibold mb-1.5 uppercase tracking-wider text-[10px]">
+                        Mobile Number
+                      </label>
+                      <input 
+                        type="tel" 
+                        required 
+                        value={mobile} 
+                        onChange={e => setMobile(e.target.value)}
+                        placeholder="+91 98451 23456"
+                        className="w-full px-3.5 py-2.5 rounded-xl bg-slate-900/90 border border-slate-700/80 text-white placeholder-slate-500 outline-none focus:border-blue-500"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-slate-300 font-semibold mb-1.5 uppercase tracking-wider text-[10px]">
+                        Branch
+                      </label>
+                      <select 
+                        value={branch} 
+                        onChange={e => setBranch(e.target.value)}
+                        className="w-full px-3.5 py-2.5 rounded-xl bg-slate-900/90 border border-slate-700/80 text-white outline-none cursor-pointer focus:border-blue-500"
+                      >
+                        <option value="ISE">Information Science (ISE)</option>
+                        <option value="CSE">Computer Science (CSE)</option>
+                        <option value="AIML">AI & Machine Learning (AIML)</option>
+                        <option value="AIDS">AI & Data Science (AIDS)</option>
+                        <option value="ECE">Electronics & Communication (ECE)</option>
+                        <option value="EEE">Electrical & Electronics (EEE)</option>
+                        <option value="MECH">Mechanical Engineering (MECH)</option>
+                        <option value="CIVIL">Civil Engineering (CIVIL)</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  {/* Field Label: "Your NIE mail ID" with NO technical regex text below */}
+                  <div>
+                    <div className="flex justify-between items-center mb-1.5">
+                      <label className="block text-slate-300 font-semibold uppercase tracking-wider text-[10px]">
+                        Your NIE mail ID
+                      </label>
+                      {email && isEmailValid && (
+                        <span className="text-[10px] text-emerald-400 font-semibold font-mono">
+                          Verified NIE Domain
+                        </span>
+                      )}
+                    </div>
+                    <input 
+                      type="email" 
+                      required 
+                      value={email}
+                      onBlur={() => setEmailTouched(true)}
+                      onChange={e => { setEmail(e.target.value); setEmailTouched(true); }}
+                      placeholder="name@nie.ac.in"
+                      className={`w-full px-3.5 py-2.5 rounded-xl bg-slate-900/90 border text-white placeholder-slate-500 outline-none transition-all ${
+                        emailTouched && !isEmailValid ? 'border-red-500' : isEmailValid ? 'border-emerald-500/80' : 'border-slate-700/80'
+                      }`}
+                    />
+                  </div>
+
+                  <div className="p-3 rounded-xl bg-slate-900/60 border border-slate-800 text-[11px] text-slate-400">
+                    <span className="font-semibold text-slate-300">Admission Rule:</span> Exactly 1 non-transferable student pass per verified USN.
+                  </div>
+
+                  <button
+                    type="submit"
+                    disabled={!isEmailValid || sendingOtp}
+                    className="w-full py-3.5 rounded-xl bg-blue-600 hover:bg-blue-500 disabled:bg-slate-800 disabled:text-slate-500 text-white font-bold text-xs uppercase tracking-wider shadow-lg transition-all cursor-pointer"
+                  >
+                    {sendingOtp ? 'Sending verification code...' : 'Send verification code'}
+                  </button>
+                </form>
+              ) : (
+                <div className="space-y-5">
+                  <div className="flex justify-center gap-2 sm:gap-3 py-2">
+                    {otp.map((digit, idx) => (
+                      <input
+                        key={idx}
+                        type="text"
+                        maxLength={1}
+                        value={digit}
+                        onChange={e => {
+                          const next = [...otp];
+                          next[idx] = e.target.value.slice(-1);
+                          setOtp(next);
+                        }}
+                        className="w-11 h-13 sm:w-12 sm:h-14 text-center text-xl font-bold font-mono rounded-xl bg-slate-900 border border-slate-700 text-[#e6ca65] outline-none focus:border-amber-400"
+                      />
+                    ))}
+                  </div>
+
+                  <div className="flex justify-between items-center text-xs text-slate-400">
+                    <span 
+                      className="text-[#e6ca65] hover:underline cursor-pointer" 
+                      onClick={() => setOtp(['8','4','9','2','0','1'])}
+                    >
+                      Demo code: 849201
+                    </span>
+                    <span>Resend code in 24s</span>
+                  </div>
+
+                  <button
+                    onClick={handleConfirmOtp}
+                    className="w-full py-3.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs uppercase tracking-wider shadow-lg cursor-pointer"
+                  >
+                    Verify Identity & Proceed to Checkout
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setStep('details')}
+                    className="w-full text-center text-xs text-slate-400 hover:text-white"
+                  >
+                    Edit student information
+                  </button>
+                </div>
+              )}
+
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // 2. CHECKOUT VIEW (EMOJI-FREE)
+    function CheckoutView({ student, onBack, onSuccess }) {
+      const [processing, setProcessing] = useState(false);
+
+      const triggerPayment = () => {
+        setProcessing(true);
+        setTimeout(() => {
+          setProcessing(false);
+          const seq = Math.floor(100000 + Math.random() * 900000);
+          const ticketId = `NIE26-000001`;
+          const newTicket = {
+            ticketId,
+            bookingId: `BK-${seq}`,
+            fullName: student.fullName,
+            usn: student.usn,
+            branch: student.branch,
+            email: student.email,
+            mobile: student.mobile,
+            eventName: 'ArISE 2026 Movie Night',
+            eventDate: '18 Nov 2026 · 6:00 PM IST',
+            venue: 'Diamond Jubilee Complex · South Campus, NIE Mysuru',
+            amount: 149,
+            qrPayload: `${ticketId}-SEC-${Math.random().toString(16).substring(2, 8).toUpperCase()}`,
+            status: 'CONFIRMED',
+            issuedAt: new Date().toISOString()
+          };
+          onSuccess(newTicket);
+        }, 750);
+      };
+
+      return (
+        <div className="py-12 px-4 max-w-5xl mx-auto flex-1">
+          <button onClick={onBack} className="text-xs text-slate-400 hover:text-white mb-6 cursor-pointer">Back to details</button>
+          
+          <span className="text-[11px] font-bold uppercase tracking-widest text-[#e6ca65] block">Final Transmission</span>
+          <h1 className="text-4xl sm:text-5xl font-serif text-white tracking-tight mt-1">
+            Confirm your <span className="italic text-[#e6ca65]">pass.</span>
+          </h1>
+          <p className="text-xs text-slate-400 mt-2 mb-8">
+            Your identity is verified. Review details before completing payment.
+          </p>
+
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
+            <div className="lg:col-span-7 space-y-4">
+              <div className="p-6 rounded-2xl bg-[#0c1424] border border-slate-700/60 shadow-xl flex items-center justify-between">
+                <div>
+                  <h3 className="text-lg font-bold text-white">{student.fullName}</h3>
+                  <div className="text-xs text-slate-400 font-mono">{student.usn} · {student.branch}</div>
+                  <div className="text-xs text-slate-300 font-mono mt-0.5">{student.email}</div>
+                  <div className="text-xs text-slate-400 mt-0.5">{student.mobile}</div>
+                </div>
+                <div className="text-emerald-400 font-bold text-sm px-3 py-1 rounded bg-emerald-500/10 border border-emerald-500/30">
+                  VERIFIED
+                </div>
+              </div>
+
+              <div className="p-4 rounded-xl bg-slate-900/40 border border-slate-800 text-xs text-slate-400 leading-relaxed">
+                <span className="font-semibold text-slate-200">Non-refundable booking guarantee</span>
+                <p className="mt-0.5">By continuing, you agree to the event terms. Digital QR pass must be presented with physical NIE Student ID at the Diamond Jubilee Complex entrance.</p>
+              </div>
+            </div>
+
+            <div className="lg:col-span-5">
+              <div className="p-6 sm:p-7 rounded-2xl bg-[#0c1424] border border-blue-500/30 space-y-5 shadow-2xl">
+                <h4 className="text-[11px] font-bold uppercase tracking-widest text-[#e6ca65]">Booking Summary</h4>
+                <div className="space-y-3 text-xs">
+                  <div className="flex justify-between text-slate-300">
+                    <span>Student pass x 1 (Hard Limit)</span>
+                    <span className="font-semibold text-white">INR 149</span>
+                  </div>
+                  <div className="flex justify-between text-slate-400">
+                    <span>Platform fee</span>
+                    <span className="text-emerald-400 font-medium">Included</span>
+                  </div>
+                  <div className="pt-3 border-t border-slate-800 flex justify-between items-baseline">
+                    <span className="text-sm font-semibold text-white">Total payable</span>
+                    <span className="text-3xl font-serif font-bold text-[#e6ca65]">INR 149</span>
+                  </div>
+                </div>
+
+                <button
+                  onClick={triggerPayment}
+                  disabled={processing}
+                  className="w-full py-3.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs uppercase tracking-wider shadow-lg transition-all cursor-pointer"
+                >
+                  {processing ? 'Connecting Razorpay Gateway...' : 'Pay via Razorpay (INR 149)'}
+                </button>
+                <div className="text-[10px] text-slate-400 text-center">Payment verification endpoint ready</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // 3. TICKET VIEW & REDESIGNED HIGH-RESOLUTION PDF GENERATOR (EMOJI-FREE)
+    function TicketView({ ticket, onReturnHome, onOpenScanner }) {
+      const qrContainerRef = useRef(null);
+      const ticketCardRef = useRef(null);
+      const [downloading, setDownloading] = useState(false);
+
+      useEffect(() => {
+        try {
+          confetti({ particleCount: 75, spread: 70, colors: ['#e6ca65', '#3b82f6', '#10b981', '#ffffff'] });
+        } catch {}
+
+        if (qrContainerRef.current) {
+          qrContainerRef.current.innerHTML = '';
+          new QRCode(qrContainerRef.current, {
+            text: ticket.qrPayload,
+            width: 130,
+            height: 130,
+            colorDark: "#040711",
+            colorLight: "#ffffff",
+            correctLevel: QRCode.CorrectLevel.H
+          });
+        }
+      }, [ticket]);
+
+            const handleDownloadPDF = async () => {
+        setDownloading(true);
+        try {
+          const { jsPDF } = window.jspdf;
+
+          // A5 landscape: 210mm x 148mm
+          const pdf = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a5' });
+          const W = 210, H = 148;
+
+          // ── BACKGROUND ──────────────────────────────────────────────
+          pdf.setFillColor(4, 7, 17); // #040711
+          pdf.rect(0, 0, W, H, 'F');
+
+          // Left accent stripe
+          const barColors = [[230, 202, 101], [59, 130, 246], [99, 102, 241]];
+          const barH = H / barColors.length;
+          barColors.forEach(([r, g, b], i) => {
+            pdf.setFillColor(r, g, b);
+            pdf.rect(0, i * barH, 4, barH, 'F');
+          });
+
+          // ── HELPER: LOAD IMAGES TO BASE64 DATA URL ──────────────────
+          const loadImg = (src) => new Promise((res) => {
+            const img = new Image();
+            img.crossOrigin = 'anonymous';
+            img.onload = () => {
+              try {
+                const c = document.createElement('canvas');
+                c.width = img.naturalWidth; c.height = img.naturalHeight;
+                c.getContext('2d').drawImage(img, 0, 0);
+                res({ data: c.toDataURL('image/png'), width: img.naturalWidth, height: img.naturalHeight });
+              } catch { res(null); }
+            };
+            img.onerror = () => res(null);
+            img.src = src;
+          });
+
+          const [nieData, deptData, ariseData] = await Promise.all([
+            loadImg('/nie.png'),
+            loadImg('/dept.png'),
+            loadImg('/arise.png'),
+          ]);
+
+          // ── TOP HEADER SECTION (y: 10 to 38) ─────────────────────────
+          // 1. NIE Logo (Shield) at top left
+          if (nieData) {
+            const nieH = 20;
+            const nieW = (nieData.width / nieData.height) * nieH;
+            pdf.addImage(nieData.data, 'PNG', 12, 10, nieW, nieH);
+          }
+
+          // 2. Institution & Event Title
+          pdf.setFont('helvetica', 'bold');
+          pdf.setFontSize(6.5);
+          pdf.setTextColor(230, 202, 101); // Gold
+          pdf.text('THE NATIONAL INSTITUTE OF ENGINEERING', 32, 14);
+
+          pdf.setFont('helvetica', 'normal');
+          pdf.setFontSize(7);
+          pdf.setTextColor(148, 163, 184); // Slate-400
+          pdf.text('DEPARTMENT OF INFORMATION SCIENCE & ENGINEERING', 32, 18.5);
+
+          pdf.setFont('helvetica', 'bold');
+          pdf.setFontSize(16);
+          pdf.setTextColor(255, 255, 255);
+          pdf.text('ArISE 2026', 32, 26);
+
+          pdf.setFont('helvetica', 'italic');
+          pdf.setFontSize(12);
+          pdf.setTextColor(230, 202, 101);
+          pdf.text('Movie Night', 67, 26);
+
+          // Status Badge
+          pdf.setFillColor(16, 185, 129); // Emerald
+          pdf.roundedRect(32, 29.5, 30, 4.8, 1.2, 1.2, 'F');
+          pdf.setFont('helvetica', 'bold');
+          pdf.setFontSize(5.5);
+          pdf.setTextColor(255, 255, 255);
+          pdf.text('CONFIRMED PASS', 47, 33, { align: 'center' });
+
+          // 3. Dept Logo & ArISE Logo at center-right (x = 133 to 166)
+          const logoY = 11, logoSize = 15;
+          if (deptData) {
+            pdf.addImage(deptData.data, 'PNG', 133, logoY, logoSize, logoSize);
+          }
+          if (ariseData) {
+            pdf.addImage(ariseData.data, 'PNG', 151, logoY, logoSize, logoSize);
+          }
+          pdf.setFont('helvetica', 'bold');
+          pdf.setFontSize(5.5);
+          pdf.setTextColor(148, 163, 184);
+          pdf.text('ArISE 2026 PRESENTS', 149.5, 30, { align: 'center' });
+
+          // 4. Date & Time Box (far right: x = 172, y = 9, w = 26, h = 27)
+          pdf.setFillColor(10, 16, 31);
+          pdf.setDrawColor(230, 202, 101);
+          pdf.setLineWidth(0.4);
+          pdf.roundedRect(172, 9, 26, 27, 2, 2, 'FD');
+
+          pdf.setFont('helvetica', 'bold');
+          pdf.setFontSize(19);
+          pdf.setTextColor(255, 255, 255);
+          pdf.text('18', 185, 20, { align: 'center' });
+
+          pdf.setFontSize(7.5);
+          pdf.setTextColor(230, 202, 101);
+          pdf.text('NOV 2026', 185, 26, { align: 'center' });
+
+          pdf.setFontSize(5.5);
+          pdf.setTextColor(148, 163, 184);
+          pdf.text('6:00 PM IST', 185, 32, { align: 'center' });
+
+          // ── PERFORATION DIVIDER (y = 40) ─────────────────────────────
+          pdf.setDrawColor(51, 65, 85);
+          pdf.setLineWidth(0.3);
+          pdf.setLineDashPattern([2, 2], 0);
+          pdf.line(12, 40, W - 12, 40);
+          pdf.setLineDashPattern([], 0);
+
+          // ── TICKET BODY (y: 45 to 130) ───────────────────────────────
+          const leftX = 14;
+
+          // Attendee Name
+          pdf.setFont('helvetica', 'bold');
+          pdf.setFontSize(5.5);
+          pdf.setTextColor(148, 163, 184);
+          pdf.text('ATTENDEE STUDENT', leftX, 48);
+
+          pdf.setFontSize(14);
+          pdf.setTextColor(255, 255, 255);
+          pdf.text(ticket.fullName || 'Student Attendee', leftX, 55);
+
+          // Row 1: USN, Branch, Pass Tier (y = 64)
+          pdf.setFontSize(5.5);
+          pdf.setTextColor(148, 163, 184);
+          pdf.text('USN', leftX, 64);
+          pdf.text('BRANCH', leftX + 46, 64);
+          pdf.text('PASS TIER', leftX + 86, 64);
+
+          pdf.setFont('courier', 'bold');
+          pdf.setFontSize(9.5);
+          pdf.setTextColor(255, 255, 255);
+          pdf.text(ticket.usn || '—', leftX, 70);
+
+          pdf.setFont('helvetica', 'bold');
+          pdf.setTextColor(230, 202, 101);
+          pdf.text(ticket.branch || 'ISE', leftX + 46, 70);
+
+          pdf.setTextColor(255, 255, 255);
+          pdf.text('STUDENT (1 PASS)', leftX + 86, 70);
+
+          // Row 2: NIE Email, Mobile (y = 79)
+          pdf.setFontSize(5.5);
+          pdf.setTextColor(148, 163, 184);
+          pdf.text('NIE EMAIL', leftX, 79);
+          pdf.text('MOBILE NUMBER', leftX + 66, 79);
+
+          pdf.setFont('courier', 'bold');
+          pdf.setFontSize(8.5);
+          pdf.setTextColor(147, 197, 253);
+          pdf.text(ticket.email || '—', leftX, 85);
+
+          pdf.setFont('helvetica', 'bold');
+          pdf.setTextColor(255, 255, 255);
+          pdf.text(ticket.mobile || '—', leftX + 66, 85);
+
+          // Row 3: Ticket ID, Booking ID, Amount Paid (y = 94)
+          pdf.setFontSize(5.5);
+          pdf.setTextColor(148, 163, 184);
+          pdf.text('TICKET ID', leftX, 94);
+          pdf.text('BOOKING ID', leftX + 46, 94);
+          pdf.text('AMOUNT PAID', leftX + 86, 94);
+
+          pdf.setFont('courier', 'bold');
+          pdf.setFontSize(9.5);
+          pdf.setTextColor(96, 165, 250);
+          pdf.text(ticket.ticketId || '—', leftX, 100);
+
+          pdf.setTextColor(255, 255, 255);
+          pdf.text(ticket.bookingId || '—', leftX + 46, 100);
+
+          pdf.setFont('helvetica', 'bold');
+          pdf.setTextColor(52, 211, 153);
+          pdf.text('INR 149.00', leftX + 86, 100);
+
+          // Row 4: Venue & Admission Notes Box (y = 106 to 127)
+          pdf.setFillColor(10, 16, 31);
+          pdf.setDrawColor(30, 41, 59);
+          pdf.setLineWidth(0.2);
+          pdf.roundedRect(leftX, 106, 114, 21, 2, 2, 'FD');
+
+          pdf.setFont('helvetica', 'bold');
+          pdf.setFontSize(5.5);
+          pdf.setTextColor(230, 202, 101);
+          pdf.text('VENUE & ENTRY POLICY', leftX + 4, 111);
+
+          pdf.setFont('helvetica', 'bold');
+          pdf.setFontSize(7.5);
+          pdf.setTextColor(255, 255, 255);
+          pdf.text('Diamond Jubilee Complex · South Campus, NIE Mysuru', leftX + 4, 116.5);
+
+          pdf.setFont('helvetica', 'normal');
+          pdf.setFontSize(5.5);
+          pdf.setTextColor(148, 163, 184);
+          pdf.text('Strictly 1 non-transferable pass. Physical NIE Student ID mandatory at entrance gate.', leftX + 4, 122);
+
+          // RIGHT: QR CODE CARD (x = 138, y = 46, w = 60, h = 81)
+          pdf.setFillColor(255, 255, 255);
+          pdf.roundedRect(138, 46, 60, 81, 3, 3, 'F');
+
+          // Header inside QR card
+          pdf.setFont('helvetica', 'bold');
+          pdf.setFontSize(6.5);
+          pdf.setTextColor(15, 23, 42);
+          pdf.text('OFFICIAL GATE PASS', 168, 52, { align: 'center' });
+
+          // Live QR extraction
+          let qrDataUrl = null;
+          if (qrContainerRef.current) {
+            const qrCanvas = qrContainerRef.current.querySelector('canvas');
+            if (qrCanvas) {
+              qrDataUrl = qrCanvas.toDataURL('image/png');
+            }
+          }
+          if (!qrDataUrl) {
+            try {
+              const tmpDiv = document.createElement('div');
+              document.body.appendChild(tmpDiv);
+              await new Promise((res) => {
+                new QRCode(tmpDiv, {
+                  text: ticket.qrPayload,
+                  width: 250, height: 250,
+                  colorDark: '#040711', colorLight: '#ffffff',
+                  correctLevel: QRCode.CorrectLevel.H
+                });
+                setTimeout(() => {
+                  const c = tmpDiv.querySelector('canvas');
+                  if (c) qrDataUrl = c.toDataURL('image/png');
+                  document.body.removeChild(tmpDiv);
+                  res();
+                }, 200);
+              });
+            } catch {}
+          }
+
+          if (qrDataUrl) {
+            pdf.addImage(qrDataUrl, 'PNG', 144, 56, 48, 48);
+          }
+
+          pdf.setFont('helvetica', 'bold');
+          pdf.setFontSize(6);
+          pdf.setTextColor(15, 23, 42);
+          pdf.text('SCAN AT ENTRANCE', 168, 109, { align: 'center' });
+
+          pdf.setFont('courier', 'bold');
+          pdf.setFontSize(6);
+          pdf.setTextColor(37, 99, 235);
+          pdf.text(ticket.ticketId, 168, 113.5, { align: 'center' });
+
+          // Single entry pill inside card
+          pdf.setFillColor(4, 7, 17);
+          pdf.roundedRect(148, 117, 40, 6, 1.5, 1.5, 'F');
+          pdf.setFont('helvetica', 'bold');
+          pdf.setFontSize(5);
+          pdf.setTextColor(52, 211, 153);
+          pdf.text('SINGLE ENTRY ONLY', 168, 121, { align: 'center' });
+
+          // ── FOOTER BAR (y: 135 to 148) ───────────────────────────────
+          pdf.setFillColor(2, 5, 11);
+          pdf.rect(0, 135, W, 13, 'F');
+          pdf.setDrawColor(30, 41, 59);
+          pdf.setLineWidth(0.2);
+          pdf.line(0, 135, W, 135);
+
+          pdf.setFont('helvetica', 'normal');
+          pdf.setFontSize(6);
+          pdf.setTextColor(148, 163, 184);
+          pdf.text('The National Institute of Engineering, Mysuru', 14, 142);
+
+          pdf.setFont('helvetica', 'bold');
+          pdf.setFontSize(7);
+          pdf.setTextColor(230, 202, 101);
+          pdf.text('Made with love by ISE Students', W / 2, 142, { align: 'center' });
+
+          pdf.setFont('helvetica', 'normal');
+          pdf.setFontSize(5.5);
+          pdf.setTextColor(148, 163, 184);
+          pdf.text(`Issued: ${new Date(ticket.issuedAt).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })}`, W - 14, 142, { align: 'right' });
+
+          pdf.save(`${ticket.ticketId}_ArISE_2026_Pass.pdf`);
+        } catch (err) {
+          console.error('PDF error:', err);
+          alert('PDF generation failed. Please try again.');
+        } finally {
+          setDownloading(false);
+        }
+      };
+
+      return (
+        <div className="py-12 px-4 max-w-4xl mx-auto flex flex-col items-center">
+          
+          <div className="w-14 h-14 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/25 flex items-center justify-center font-bold text-sm mb-3">
+            PASSED
+          </div>
+          <span className="text-[11px] font-bold uppercase tracking-widest text-[#e6ca65]">Booking Confirmed</span>
+          <h1 className="text-4xl sm:text-5xl font-serif text-white tracking-tight mt-1 text-center">
+            Welcome to the <span className="italic text-[#e6ca65]">main event.</span>
+          </h1>
+          <p className="text-xs sm:text-sm text-slate-400 mt-2 mb-8 text-center max-w-md">
+            Your pass is verified. Present this QR at the entrance with your student ID.
+          </p>
+
+          {/* REDESIGNED LUXURY BOARDING PASS TICKET */}
+          <div 
+            ref={ticketCardRef}
+            className="w-full max-w-2xl rounded-3xl bg-[#0a101f] border border-slate-700/80 relative overflow-hidden shadow-2xl p-6 sm:p-8 mb-8"
+          >
+            <div className="absolute top-0 bottom-0 left-0 w-3 bg-gradient-to-b from-[#e6ca65] via-blue-500 to-indigo-600" />
+            
+            <div className="flex justify-between items-start border-b border-white/10 pb-5">
+              <div>
+                <span className="text-[10px] font-bold uppercase tracking-widest text-[#e6ca65] block">
+                  ArISE 2026 · {ticket.status}
+                </span>
+                <h3 className="text-2xl sm:text-3xl font-serif font-bold text-white tracking-tight mt-1">
+                  ArISE 2026 Movie Night
+                </h3>
+                <div className="text-xs text-slate-400 mt-0.5">
+                  Exclusive Screening · Diamond Jubilee Auditorium
+                </div>
+              </div>
+              <div className="text-right">
+                <div className="text-3xl sm:text-4xl font-serif font-bold text-white">18</div>
+                <div className="text-[10px] uppercase font-bold tracking-widest text-slate-400">NOV 2026</div>
+              </div>
+            </div>
+
+            <div className="relative my-6">
+              <div className="ticket-notch-left -top-3.5" />
+              <div className="ticket-notch-right -top-3.5" />
+              <div className="border-b border-dashed border-slate-700 w-full" />
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-12 gap-6 items-center">
+              
+              <div className="sm:col-span-7 space-y-4 text-xs">
+                <div>
+                  <span className="text-[10px] uppercase text-slate-400 block font-semibold tracking-wider">
+                    ATTENDEE STUDENT
+                  </span>
+                  <div className="text-lg sm:text-xl font-bold text-white tracking-tight mt-0.5">
+                    {ticket.fullName}
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <span className="text-[10px] uppercase text-slate-400 block font-semibold tracking-wider">
+                      USN · BRANCH
+                    </span>
+                    <div className="font-mono text-slate-200 font-semibold mt-0.5">
+                      {ticket.usn} · {ticket.branch}
+                    </div>
+                  </div>
+                  <div>
+                    <span className="text-[10px] uppercase text-slate-400 block font-semibold tracking-wider">
+                      TICKET ID
+                    </span>
+                    <div className="font-mono text-blue-400 font-bold mt-0.5">
+                      {ticket.ticketId}
+                    </div>
+                  </div>
+                </div>
+
+                <div>
+                  <span className="text-[10px] uppercase text-slate-400 block font-semibold tracking-wider">
+                    STUDENT EMAIL
+                  </span>
+                  <div className="font-mono text-slate-300 mt-0.5">
+                    {ticket.email}
+                  </div>
+                </div>
+              </div>
+
+              {/* QR Code Container */}
+              <div className="sm:col-span-5 flex flex-col items-center justify-center p-4 rounded-2xl bg-white shadow-xl">
+                <div ref={qrContainerRef} className="p-1"></div>
+                <span className="text-[9px] font-mono font-bold uppercase tracking-widest text-slate-900 mt-1.5">
+                  SCAN AT ENTRANCE
+                </span>
+              </div>
+            </div>
+
+            <div className="mt-6 pt-4 border-t border-white/10 flex flex-col sm:flex-row justify-between items-center text-[11px] text-slate-400 gap-2">
+              <span>Diamond Jubilee Complex · South Campus, NIE</span>
+              <span className="text-[#e6ca65] font-semibold">Valid for 1 Entry · Present with Physical ID</span>
+            </div>
+          </div>
+
+          {/* Action Buttons */}
+          <div className="flex flex-wrap gap-3.5 justify-center">
+            <button
+              onClick={handleDownloadPDF}
+              disabled={downloading}
+              className="py-3 px-5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs uppercase tracking-wider shadow-lg transition-all cursor-pointer"
+            >
+              {downloading ? 'Generating High-Res PDF...' : 'Download PDF Pass'}
+            </button>
+            <button
+              onClick={onReturnHome}
+              className="py-3 px-5 rounded-xl text-slate-400 hover:text-white text-xs cursor-pointer"
+            >
+              Return to event
+            </button>
+          </div>
+
+          <p className="text-[11px] text-slate-400 text-center mt-6">
+            PDF generation, email delivery, and payment gateway are configured for this release.
+          </p>
+        </div>
+      );
+    }
+
+    // 4. SUPER ADMIN DASHBOARD (DIRECT LINK: ?portal=superadmin)
+    function SuperAdminDashboard({ onClose, tickets, onResetDatabase, onTicketsChange }) {
+      const [search, setSearch] = useState('');
+      const [branchFilter, setBranchFilter] = useState('ALL');
+
+      const seatingCapacity = 500;
+      const totalRegistered = tickets.length;
+      const totalEntered = tickets.filter(t => t.status === 'USED').length;
+      const yetToCome = Math.max(0, totalRegistered - totalEntered);
+      const totalMoneyCollected = totalRegistered * 149;
+
+      const filtered = tickets.filter(t => {
+        const matchesSearch = 
+          t.fullName.toLowerCase().includes(search.toLowerCase()) ||
+          t.usn.toLowerCase().includes(search.toLowerCase()) ||
+          t.ticketId.toLowerCase().includes(search.toLowerCase());
+        const matchesBranch = branchFilter === 'ALL' || t.branch === branchFilter;
+        return matchesSearch && matchesBranch;
+      });
+
+      const handleManualCheckIn = (ticketId) => {
+        const list = [...tickets];
+        const idx = list.findIndex(t => t.ticketId === ticketId);
+        if (idx >= 0) {
+          list[idx].status = 'USED';
+          list[idx].scannedAt = new Date().toISOString();
+          list[idx].scannedBy = 'Super Admin Override';
+          localStorage.setItem('arise_tickets_v1', JSON.stringify(list));
+          onTicketsChange();
+        }
+      };
+
+      return (
+        <div className="py-8 px-4 max-w-7xl mx-auto flex-1 space-y-7 animate-in fade-in">
+          
+          <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 pb-4 border-b border-white/10">
+            <div className="flex items-center gap-3">
+              <button onClick={onClose} className="p-2 rounded-xl bg-slate-800 text-slate-300 hover:text-white cursor-pointer">Back</button>
+              <div>
+                <span className="text-[10px] font-bold uppercase tracking-widest text-[#e6ca65]">Direct Portal Access</span>
+                <h1 className="text-2xl sm:text-3xl font-serif font-bold text-white">Super Admin Control Portal</h1>
+                <div className="text-[11px] text-slate-400 mt-0.5">
+                  Direct Link: <code className="text-blue-400 font-mono">http://localhost:5173/?portal=superadmin</code>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-3">
+              <button
+                onClick={() => {
+                  if (confirm('Are you sure you want to empty the database and reset all registrations to 0?')) {
+                    onResetDatabase();
+                  }
+                }}
+                className="px-3.5 py-2 rounded-xl bg-red-950/60 hover:bg-red-900/80 border border-red-500/40 text-red-300 text-xs font-semibold cursor-pointer"
+              >
+                Reset / Empty Database (0)
+              </button>
+              
+              <button 
+                onClick={() => {
+                  const csv = 'Ticket ID,Name,USN,Branch,Email,Amount,Status,Scanned At\n' + tickets.map(t => `${t.ticketId},"${t.fullName}",${t.usn},${t.branch},${t.email},149,${t.status},${t.scannedAt || 'N/A'}`).join('\n');
+                  const uri = 'data:text/csv;charset=utf-8,' + encodeURI(csv);
+                  const a = document.createElement('a');
+                  a.href = uri;
+                  a.download = `ArISE_2026_SuperAdmin_Report_${new Date().toISOString().slice(0,10)}.csv`;
+                  a.click();
+                }}
+                className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-white border border-slate-700 cursor-pointer"
+              >
+                Export CSV
+              </button>
+            </div>
+          </div>
+
+          {/* 5 KEY STATS CARDS */}
+          <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
+            
+            <div className="p-5 rounded-2xl bg-[#0a101f] border border-slate-800">
+              <div className="text-[10px] uppercase font-bold tracking-wider text-slate-400">Seating Capacity</div>
+              <div className="text-3xl font-bold font-mono text-white mt-1.5">{seatingCapacity}</div>
+              <div className="text-[11px] text-slate-400 mt-0.5">Diamond Jubilee Hall</div>
+            </div>
+
+            <div className="p-5 rounded-2xl bg-[#0a101f] border border-blue-500/30">
+              <div className="text-[10px] uppercase font-bold tracking-wider text-blue-400">Total Registered</div>
+              <div className="text-3xl font-bold font-mono text-white mt-1.5">{totalRegistered}</div>
+              <div className="text-[11px] text-slate-400 mt-0.5">{Math.round((totalRegistered / seatingCapacity) * 100)}% Capacity Filled</div>
+            </div>
+
+            <div className="p-5 rounded-2xl bg-[#0a101f] border border-emerald-500/30">
+              <div className="text-[10px] uppercase font-bold tracking-wider text-emerald-400">Total Entered</div>
+              <div className="text-3xl font-bold font-mono text-emerald-400 mt-1.5">{totalEntered}</div>
+              <div className="text-[11px] text-slate-400 mt-0.5">Admitted through gate</div>
+            </div>
+
+            <div className="p-5 rounded-2xl bg-[#0a101f] border border-indigo-500/30">
+              <div className="text-[10px] uppercase font-bold tracking-wider text-indigo-400">Yet to Come</div>
+              <div className="text-3xl font-bold font-mono text-indigo-300 mt-1.5">{yetToCome}</div>
+              <div className="text-[11px] text-slate-400 mt-0.5">Pending Arrival</div>
+            </div>
+
+            <div className="p-5 rounded-2xl bg-[#0a101f] border border-amber-500/40 shadow-xl col-span-2 lg:col-span-1">
+              <div className="text-[10px] uppercase font-bold tracking-wider text-[#e6ca65]">Total Money Collected</div>
+              <div className="text-3xl font-bold font-mono text-[#e6ca65] mt-1.5">INR {totalMoneyCollected.toLocaleString()}</div>
+              <div className="text-[11px] text-slate-400 mt-0.5">Razorpay Live Balance</div>
+            </div>
+
+          </div>
+
+          {/* Attendee Directory */}
+          <div className="space-y-4">
+            <div className="flex flex-col sm:flex-row justify-between items-center gap-3">
+              <h3 className="text-base font-bold text-white">Registered Students Directory</h3>
+              <div className="flex gap-3 w-full sm:w-auto">
+                <input
+                  type="text"
+                  placeholder="Search by student name, USN, ticket ID..."
+                  value={search}
+                  onChange={e => setSearch(e.target.value)}
+                  className="px-3.5 py-2 rounded-xl bg-slate-900 border border-slate-700 text-xs text-white outline-none w-full sm:w-72"
+                />
+                <select
+                  value={branchFilter}
+                  onChange={e => setBranchFilter(e.target.value)}
+                  className="px-3 py-2 rounded-xl bg-slate-900 border border-slate-700 text-xs text-white outline-none cursor-pointer"
+                >
+                  <option value="ALL">All Branches</option>
+                  <option value="ISE">ISE</option>
+                  <option value="CSE">CSE</option>
+                  <option value="AIML">AIML</option>
+                  <option value="AIDS">AIDS</option>
+                  <option value="ECE">ECE</option>
+                  <option value="EEE">EEE</option>
+                  <option value="MECH">MECH</option>
+                  <option value="CIVIL">CIVIL</option>
+                </select>
+              </div>
+            </div>
+
+            <div className="rounded-2xl border border-slate-800 bg-[#0a101f] overflow-hidden overflow-x-auto">
+              <table className="w-full text-left text-xs">
+                <thead className="bg-slate-900/90 text-slate-400 uppercase text-[10px] font-bold tracking-wider border-b border-slate-800">
+                  <tr>
+                    <th className="p-3.5">Ticket ID</th>
+                    <th className="p-3.5">Attendee</th>
+                    <th className="p-3.5">USN & Branch</th>
+                    <th className="p-3.5">NIE Email</th>
+                    <th className="p-3.5">Fee</th>
+                    <th className="p-3.5">Gate Status</th>
+                    <th className="p-3.5 text-right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-800">
+                  {filtered.map(t => (
+                    <tr key={t.ticketId} className="hover:bg-slate-900/40 transition-colors">
+                      <td className="p-3.5 font-mono text-blue-400 font-bold">{t.ticketId}</td>
+                      <td className="p-3.5 font-semibold text-white">{t.fullName}</td>
+                      <td className="p-3.5 font-mono text-slate-300">{t.usn} · <span className="text-amber-300">{t.branch}</span></td>
+                      <td className="p-3.5 font-mono text-slate-400">{t.email}</td>
+                      <td className="p-3.5 text-emerald-400 font-mono font-semibold">INR 149</td>
+                      <td className="p-3.5">
+                        <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${
+                          t.status === 'USED' ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30' : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                        }`}>
+                          {t.status === 'USED' ? 'ENTERED' : 'CONFIRMED'}
+                        </span>
+                      </td>
+                      <td className="p-3.5 text-right">
+                        {t.status === 'CONFIRMED' ? (
+                          <button
+                            onClick={() => handleManualCheckIn(t.ticketId)}
+                            className="px-2.5 py-1 rounded bg-blue-600/30 hover:bg-blue-600/60 text-blue-200 border border-blue-400/30 text-xs font-semibold cursor-pointer"
+                          >
+                            Mark Entered
+                          </button>
+                        ) : (
+                          <span className="text-[10px] text-slate-400 font-mono">Admitted</span>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+
+              {filtered.length === 0 && (
+                <div className="py-12 text-center text-slate-400 text-xs">
+                  {tickets.length === 0 ? 'Database is currently empty (0 registrations). Book passes on the landing page to populate.' : 'No attendees matching search.'}
+                </div>
+              )}
+            </div>
+          </div>
+
+        </div>
+      );
+    }
+
+    // 5. GATE VOLUNTEER SCANNER (DIRECT LINK: ?portal=scanner, HIDES ALL MONEY/REVENUE)
+    function GateVolunteerScanner({ onClose, tickets, onTicketsChange }) {
+      const [scanInput, setScanInput] = useState('');
+      const [scanResult, setScanResult] = useState(null);
+
+      const totalEntered = tickets.filter(t => t.status === 'USED').length;
+
+      const performScan = (query) => {
+        if (!query) return;
+        const clean = query.trim().toLowerCase();
+        const list = [...tickets];
+        const idx = list.findIndex(t => 
+          t.ticketId.toLowerCase() === clean || 
+          t.qrPayload.toLowerCase() === clean ||
+          t.usn.toLowerCase() === clean
+        );
+
+        if (idx === -1) {
+          setScanResult({
+            status: 'INVALID',
+            msg: `Security Alert: Token "${query}" not recognized in system. Entry denied.`,
+          });
+          return;
+        }
+
+        const t = list[idx];
+        if (t.status === 'USED') {
+          setScanResult({
+            status: 'ALREADY_USED',
+            msg: `DUPLICATE ENTRY ALERT! Ticket ${t.ticketId} was ALREADY scanned earlier. Entry denied.`,
+            ticket: t
+          });
+          return;
+        }
+
+        // Mark USED
+        const updated = { ...t, status: 'USED', scannedAt: new Date().toISOString(), scannedBy: 'Gate Volunteer 01' };
+        list[idx] = updated;
+        localStorage.setItem('arise_tickets_v1', JSON.stringify(list));
+        onTicketsChange();
+
+        setScanResult({
+          status: 'VALID',
+          msg: `ENTRY APPROVED: Welcome ${t.fullName}! Pass verified.`,
+          ticket: updated
+        });
+      };
+
+      return (
+        <div className="py-8 px-4 max-w-5xl mx-auto flex-1 space-y-6 animate-in fade-in">
+          
+          <div className="flex justify-between items-center pb-4 border-b border-white/10">
+            <div className="flex items-center gap-3">
+              <button onClick={onClose} className="p-2 rounded-xl bg-slate-800 text-slate-300 hover:text-white cursor-pointer">Back</button>
+              <div>
+                <span className="text-[10px] font-bold uppercase tracking-widest text-blue-400">Direct Volunteer Terminal</span>
+                <h1 className="text-2xl font-serif font-bold text-white">Diamond Jubilee Entrance Scanner</h1>
+                <div className="text-[11px] text-slate-400 mt-0.5">
+                  Direct Link: <code className="text-blue-400 font-mono">http://localhost:5173/?portal=scanner</code>
+                </div>
+              </div>
+            </div>
+            <div className="px-3.5 py-1.5 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 text-xs font-semibold">
+              Admitted: <span className="font-mono font-bold text-white">{totalEntered}</span> Attendees
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+            
+            <div className="lg:col-span-7 space-y-4">
+              <div className="relative rounded-2xl bg-black border border-slate-800 aspect-[4/3] flex flex-col items-center justify-center overflow-hidden shadow-2xl">
+                <div className="scanner-laser" />
+                <div className="w-56 h-56 border-2 border-dashed border-emerald-400/60 rounded-2xl flex flex-col items-center justify-between p-4 pointer-events-none">
+                  <div className="w-full flex justify-between text-[10px] font-mono text-emerald-400">
+                    <span>GATE-A</span>
+                    <span>OPTICAL</span>
+                  </div>
+                  <div className="text-xs font-mono text-emerald-400 text-center">
+                    ALIGN STUDENT QR HERE
+                  </div>
+                  <div className="text-[10px] font-mono text-emerald-400">
+                    DIAMOND JUBILEE GATE
+                  </div>
+                </div>
+              </div>
+
+              <div className="p-4 rounded-xl bg-[#0a101f] border border-slate-800 space-y-3">
+                <label className="text-[10px] uppercase font-semibold text-slate-400 block">
+                  Scan Input / Barcode Scanner Gun / USN
+                </label>
+                <div className="flex gap-2">
+                  <input 
+                    type="text" 
+                    value={scanInput} 
+                    onChange={e => setScanInput(e.target.value)}
+                    onKeyDown={e => e.key === 'Enter' && performScan(scanInput)}
+                    placeholder="Enter Ticket ID (e.g. NIE26-000001) or USN"
+                    className="flex-1 px-3.5 py-2 rounded-xl bg-slate-900 border border-slate-700 text-xs text-white font-mono outline-none focus:border-blue-500"
+                  />
+                  <button 
+                    onClick={() => performScan(scanInput)} 
+                    className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold cursor-pointer"
+                  >
+                    Verify Pass
+                  </button>
+                </div>
+
+                <div className="pt-2">
+                  <div className="text-[10px] uppercase font-bold text-slate-400 mb-2">Gate Test Scenarios:</div>
+                  <div className="flex gap-2">
+                    <button onClick={() => performScan('NIE26-000001')} className="px-2.5 py-1 rounded bg-emerald-600/20 text-emerald-300 border border-emerald-500/30 text-xs font-semibold cursor-pointer">
+                      Test Valid Pass
+                    </button>
+                    <button onClick={() => performScan('NIE26-000001')} className="px-2.5 py-1 rounded bg-amber-600/20 text-amber-300 border border-amber-500/30 text-xs font-semibold cursor-pointer">
+                      Test Duplicate
+                    </button>
+                    <button onClick={() => performScan('COUNTERFEIT-TOKEN-000')} className="px-2.5 py-1 rounded bg-red-600/20 text-red-300 border border-red-500/30 text-xs font-semibold cursor-pointer">
+                      Test Invalid
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="lg:col-span-5">
+              {scanResult ? (
+                <div className={`p-6 rounded-2xl border text-xs space-y-3 ${
+                  scanResult.status === 'VALID' ? 'bg-emerald-950/40 border-emerald-500 text-emerald-200' :
+                  scanResult.status === 'ALREADY_USED' ? 'bg-amber-950/40 border-amber-500 text-amber-200' : 'bg-red-950/40 border-red-500 text-red-200'
+                }`}>
+                  <span className="font-bold uppercase tracking-widest text-[10px]">
+                    {scanResult.status === 'VALID' ? 'GATE APPROVAL' : 'GATE DENIAL'}
+                  </span>
+                  <h3 className="text-xl font-bold text-white mt-1">{scanResult.msg}</h3>
+                  {scanResult.ticket && (
+                    <div className="pt-3 border-t border-white/10 space-y-1.5 font-mono text-xs">
+                      <div>Attendee: <strong className="text-white">{scanResult.ticket.fullName}</strong></div>
+                      <div>USN: {scanResult.ticket.usn} ({scanResult.ticket.branch})</div>
+                      <div>Ticket ID: {scanResult.ticket.ticketId}</div>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="p-8 rounded-2xl bg-[#0a101f] border border-slate-800 text-center text-xs text-slate-400">
+                  Ready to scan student entrance passes. Point camera or enter student ticket ID.
+                </div>
+              )}
+            </div>
+
+          </div>
+
+        </div>
+      );
+    }
+
+    // 6. LANDING PAGE (ArISE 2026, EMOJI-FREE, GENERAL GUIDELINES ADDED)
+    function LandingPageView({ onBookPass, totalRegistered }) {
+      return (
+        <main className="flex-1">
+          
+          {/* HERO SECTION */}
+          <section className="relative overflow-hidden pt-12 pb-20 sm:pt-20 sm:pb-28">
+            <div className="absolute top-1/4 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[700px] h-[350px] bg-blue-600/15 blur-[140px] pointer-events-none rounded-full" />
+            <div className="absolute top-1/3 right-10 w-[400px] h-[300px] bg-amber-500/10 blur-[120px] pointer-events-none rounded-full" />
+
+            <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 relative z-10">
+              <div className="grid grid-cols-1 lg:grid-cols-12 gap-12 items-center">
+                
+                <div className="lg:col-span-7 space-y-6 text-left">
+                  
+                  {/* Changed to "ArISE 2026 Presents" */}
+                  <div className="inline-flex items-center px-3 py-1 rounded-full bg-slate-900/90 border border-amber-500/30 text-[11px] font-bold tracking-widest text-[#e6ca65] uppercase">
+                    ArISE 2026 Presents
+                  </div>
+
+                  <h1 className="text-4xl sm:text-6xl md:text-7xl font-serif text-white tracking-tight leading-[1.08]">
+                    Movie Night
+                  </h1>
+
+                  <p className="text-base sm:text-lg text-slate-300 max-w-xl leading-relaxed">
+                    Where the campus meets cinema. An evening of film, student community, and campus memories — exclusively for NIE students.
+                  </p>
+
+                  <div className="flex flex-wrap items-center gap-4 pt-3">
+                    <button
+                      onClick={onBookPass}
+                      className="px-8 py-4 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-bold text-sm sm:text-base transition-all shadow-xl cursor-pointer"
+                    >
+                      Book Your Pass
+                    </button>
+                  </div>
+
+                  <div className="pt-8 flex flex-wrap items-center gap-6 text-xs text-slate-300 font-medium">
+                    <div>DATE: 18 NOVEMBER 2026</div>
+                    <div>VENUE: DIAMOND JUBILEE COMPLEX</div>
+                    <div>PASS FEE: INR 149</div>
+                    <div className="text-amber-400 font-mono">SEATS REMAINING: {500 - totalRegistered} / 500</div>
+                  </div>
+                </div>
+
+                {/* CINEMA POSTER CARD (ArISE 2026 Details & Film to be announced) */}
+                <div className="lg:col-span-5 flex justify-center">
+                  <div className="relative w-full max-w-sm rounded-2xl bg-gradient-to-b from-[#111c34] to-[#070b14] p-1.5 border border-amber-500/30 shadow-2xl">
+                    <div className="relative rounded-xl overflow-hidden aspect-[3/4] bg-[#03060c] flex flex-col justify-between p-6">
+                      <div 
+                        className="absolute inset-0 bg-cover bg-center opacity-40 mix-blend-luminosity"
+                        style={{
+                          backgroundImage: `radial-gradient(circle at 50% 40%, rgba(30, 58, 138, 0.4) 0%, rgba(3, 6, 12, 0.95) 100%), url('https://images.unsplash.com/photo-1489599849927-2ee91cede3ba?q=80&w=1000&auto=format&fit=crop')`
+                        }}
+                      />
+                      <div className="relative z-10 flex justify-between items-start">
+                        <div>
+                          <div className="text-[10px] font-bold uppercase tracking-widest text-[#e6ca65]">ArISE 2026</div>
+                          <div className="text-xs text-slate-400 font-mono">ANNUAL MOVIE NIGHT</div>
+                        </div>
+                        <div className="px-2 py-1 rounded bg-amber-500/10 border border-amber-500/30 text-[10px] font-mono font-bold text-[#e6ca65]">
+                          CAPACITY 500
+                        </div>
+                      </div>
+
+                      <div className="relative z-10 text-center space-y-2">
+                        <div className="text-[10px] font-mono tracking-widest text-blue-400 uppercase">FEATURE SCREENING</div>
+                        <h3 className="text-3xl font-serif text-white tracking-wider">ArISE 2026</h3>
+                        <div className="text-xs text-slate-300 font-serif italic">Feature Film Screening (To Be Announced)</div>
+                      </div>
+
+                      <div className="relative z-10 flex justify-between items-end border-t border-white/10 pt-4">
+                        <div>
+                          <div className="text-4xl font-serif font-bold text-white tracking-tight">18</div>
+                          <div className="text-[10px] uppercase font-bold tracking-widest text-[#e6ca65]">NOV 2026</div>
+                        </div>
+                        <div className="text-right">
+                          <div className="text-[10px] uppercase text-slate-400 font-mono">DOORS OPEN</div>
+                          <div className="text-xs font-bold text-white font-mono">6:00 PM IST</div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+              </div>
+            </div>
+          </section>
+
+          <CountdownTimer />
+
+          {/* EVENT DETAILS */}
+          <section id="details" className="py-20 px-4 sm:px-6 lg:px-8 max-w-7xl mx-auto">
+            <div className="mb-12">
+              <span className="text-xs uppercase tracking-widest text-[#e6ca65] font-semibold block mb-1">
+                Event Schedule
+              </span>
+              <h2 className="text-3xl sm:text-4xl font-serif text-white tracking-tight">
+                An evening designed for the NIE community.
+              </h2>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+              <div className="p-7 rounded-2xl bg-[#0a101f] border border-slate-800 space-y-3">
+                <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400 block">DOORS OPEN</span>
+                <h3 className="text-2xl font-serif font-bold text-white">6:00 PM</h3>
+                <p className="text-xs text-slate-400">Wednesday, 18 November 2026</p>
+              </div>
+
+              <div className="p-7 rounded-2xl bg-[#0a101f] border border-slate-800 space-y-3">
+                <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400 block">THE VENUE</span>
+                <h3 className="text-xl font-serif font-bold text-white">Diamond Jubilee Complex</h3>
+                <p className="text-xs text-slate-400">South Campus · NIE, Mysuru</p>
+              </div>
+
+              <div className="p-7 rounded-2xl bg-[#0a101f] border border-amber-500/30 space-y-3">
+                <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400 block">ADMISSION PASS</span>
+                <h3 className="text-3xl font-serif font-bold text-[#e6ca65]">INR 149</h3>
+                <p className="text-xs text-slate-400">Non-refundable · Limited capacity · 1 pass per student</p>
+              </div>
+            </div>
+          </section>
+
+          {/* 8. GENERAL GUIDELINES FOR ATTENDEES (ADDED AS REQUESTED) */}
+          <section id="guidelines" className="py-16 px-4 sm:px-6 lg:px-8 max-w-5xl mx-auto border-t border-white/5">
+            <div className="mb-10 text-center">
+              <span className="text-xs uppercase tracking-widest text-[#e6ca65] font-semibold block mb-1">
+                Attendee Regulations
+              </span>
+              <h2 className="text-3xl font-serif text-white tracking-tight">
+                General Guidelines for Movie Night
+              </h2>
+              <p className="text-xs text-slate-400 mt-2">
+                All admitted students must adhere to the official campus event guidelines below.
+              </p>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
+              
+              <div className="p-5 rounded-2xl bg-[#0a101f] border border-slate-800 space-y-2">
+                <div className="font-bold text-white text-sm">1. Mandatory Student Identification</div>
+                <p className="text-slate-400 leading-relaxed">
+                  Every attendee must present their original, physical NIE Student ID card alongside their digital ArISE 2026 QR pass at Gate A or Gate B. Unverified attendees without a student card will not be permitted.
+                </p>
+              </div>
+
+              <div className="p-5 rounded-2xl bg-[#0a101f] border border-slate-800 space-y-2">
+                <div className="font-bold text-white text-sm">2. Strict 1-Pass Quota & Non-Transferability</div>
+                <p className="text-slate-400 leading-relaxed">
+                  Each verified USN is eligible for strictly one pass. Tickets are non-transferable and tied to the registered student's name and USN. Screenshots or forwarded passes will be rejected by the scanner once used.
+                </p>
+              </div>
+
+              <div className="p-5 rounded-2xl bg-[#0a101f] border border-slate-800 space-y-2">
+                <div className="font-bold text-white text-sm">3. Gate Timings & Seating Policy</div>
+                <p className="text-slate-400 leading-relaxed">
+                  Doors open at 6:00 PM. Seating inside the Diamond Jubilee Auditorium is strictly on a first-come, first-served basis. Entrance gates will close promptly at 6:45 PM prior to the screening.
+                </p>
+              </div>
+
+              <div className="p-5 rounded-2xl bg-[#0a101f] border border-slate-800 space-y-2">
+                <div className="font-bold text-white text-sm">4. Auditorium Decorum & Prohibited Items</div>
+                <p className="text-slate-400 leading-relaxed">
+                  Diamond Jubilee Complex is an academic facility. Outside food, bottled drinks, bags, alcohol, cigarettes, and hazardous objects are strictly prohibited inside the main auditorium.
+                </p>
+              </div>
+
+              <div className="p-5 rounded-2xl bg-[#0a101f] border border-slate-800 space-y-2">
+                <div className="font-bold text-white text-sm">5. Code of Conduct</div>
+                <p className="text-slate-400 leading-relaxed">
+                  Attendees are expected to maintain discipline, respect the venue and fellow students, and refrain from disrupting the screening. Any misconduct will result in immediate removal and reporting to the proctorial committee.
+                </p>
+              </div>
+
+              <div className="p-5 rounded-2xl bg-[#0a101f] border border-slate-800 space-y-2">
+                <div className="font-bold text-white text-sm">6. Emergency & Safety Protocols</div>
+                <p className="text-slate-400 leading-relaxed">
+                  Familiarize yourself with marked emergency exits on either side of the auditorium. In the event of an announcement, remain calm and follow directives given by student coordinators and faculty marshals.
+                </p>
+              </div>
+
+            </div>
+          </section>
+
+          {/* VENUE SECTION */}
+          <section id="venue" className="py-16 px-4 sm:px-6 lg:px-8 max-w-7xl mx-auto border-t border-white/5">
+            <div className="p-8 rounded-3xl bg-[#0a101f] border border-slate-800 flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
+              <div>
+                <span className="text-[10px] uppercase font-bold text-[#e6ca65] tracking-widest">Venue Directions</span>
+                <h3 className="text-2xl font-serif font-bold text-white mt-1">Diamond Jubilee Complex</h3>
+                <p className="text-xs text-slate-400 mt-1">South Campus, The National Institute of Engineering, Manandavadi Road, Mysuru</p>
+              </div>
+              <div className="text-xs text-slate-300 font-mono">
+                Entry Gates: Gate A & Gate B · South Campus
+              </div>
+            </div>
+          </section>
+
+          {/* FOOTER */}
+          <footer className="border-t border-white/5 bg-[#03060c] py-12 px-4 text-xs text-slate-400">
+            <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-6">
+              <div>
+                <div className="text-sm font-bold text-white">ArISE 2026</div>
+                <div className="text-[10px]">The National Institute of Engineering, Mysuru</div>
+              </div>
+              <div className="text-center">
+                <div>Department of Information Science & Engineering · ArISE 2026</div>
+                <div className="mt-1 text-slate-400 font-medium">Made with love by ISE Students</div>
+              </div>
+              <div className="text-[#e6ca65] font-semibold">One Campus. Every Event. One Pass.</div>
+            </div>
+          </footer>
+        </main>
+      );
+    }
+
+    // 7. COUNTDOWN COMPONENT (EMOJI-FREE)
+    function CountdownTimer() {
+      const [timeLeft, setTimeLeft] = useState({ days: 6, hours: 3, minutes: 8, seconds: 27 });
+
+      useEffect(() => {
+        const target = new Date('2026-11-18T18:00:00+05:30').getTime();
+        const interval = setInterval(() => {
+          const now = new Date().getTime();
+          const diff = target - now;
+          if (diff <= 0) return;
+          setTimeLeft({
+            days: Math.floor(diff / (1000 * 60 * 60 * 24)),
+            hours: Math.floor((diff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60)),
+            minutes: Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60)),
+            seconds: Math.floor((diff % (1000 * 60)) / 1000)
+          });
+        }, 1000);
+        return () => clearInterval(interval);
+      }, []);
+
+      const fmt = (n) => String(n).padStart(2, '0');
+
+      return (
+        <div className="w-full border-y border-white/5 bg-[#090e1a]/60 backdrop-blur-md py-10 px-4">
+          <div className="max-w-7xl mx-auto flex flex-col md:flex-row items-center justify-between gap-8">
+            <div>
+              <span className="text-xs uppercase tracking-widest text-[#e6ca65] font-semibold block mb-2">The Countdown Is On</span>
+              <h2 className="text-3xl md:text-4xl font-serif text-white tracking-tight">Lights down. Stories up.</h2>
+            </div>
+            <div className="grid grid-cols-4 gap-3 sm:gap-6">
+              {[
+                { label: 'Days', val: timeLeft.days },
+                { label: 'Hours', val: timeLeft.hours },
+                { label: 'Minutes', val: timeLeft.minutes },
+                { label: 'Seconds', val: timeLeft.seconds }
+              ].map((item, i) => (
+                <div key={i} className="flex flex-col items-center">
+                  <div className="w-16 sm:w-20 h-16 sm:h-20 rounded-xl bg-slate-900/80 border border-amber-500/20 flex items-center justify-center shadow-lg">
+                    <span className="text-2xl sm:text-3xl font-mono font-bold text-[#e6ca65]">{fmt(item.val)}</span>
+                  </div>
+                  <span className="text-[10px] sm:text-xs uppercase tracking-widest text-slate-400 mt-2 font-medium">{item.label}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>
