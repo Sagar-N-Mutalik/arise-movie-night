@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useRef } from 'react';
-import { X, CheckCircle2, AlertCircle, ArrowRight, ShieldCheck, Mail, Sparkles, RefreshCw } from 'lucide-react';
+import { X, CheckCircle2, AlertCircle, ArrowRight, ShieldCheck, Mail, RefreshCw } from 'lucide-react';
 import { Branch, StudentAuthData } from '@/types';
 
 interface StudentAuthModalProps {
@@ -10,7 +10,7 @@ interface StudentAuthModalProps {
   onVerified: (student: StudentAuthData) => void;
 }
 
-const NIE_EMAIL_REGEX = /^[\w\.-]+@nie\.ac\.in$/;
+const EMAIL_REGEX = /^[\w\.-]+@[\w\.-]+\.[a-zA-Z]{2,}$/;
 
 export const StudentAuthModal: React.FC<StudentAuthModalProps> = ({
   isOpen,
@@ -31,20 +31,21 @@ export const StudentAuthModal: React.FC<StudentAuthModalProps> = ({
   const [emailTouched, setEmailTouched] = useState(false);
   const [isEmailValid, setIsEmailValid] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
+  const [infoMessage, setInfoMessage] = useState('');
 
-  // OTP State
-  const [otp, setOtp] = useState(['8', '4', '9', '2', '0', '1']);
-  const [timer, setTimer] = useState(30);
+  // OTP State - strictly starts empty, no demo code
+  const [otp, setOtp] = useState(['', '', '', '', '', '']);
+  const [timer, setTimer] = useState(60);
   const [isSendingCode, setIsSendingCode] = useState(false);
   const [isVerifying, setIsVerifying] = useState(false);
   const otpInputRefs = useRef<(HTMLInputElement | null)[]>([]);
 
   useEffect(() => {
     if (email.length > 0) {
-      const valid = NIE_EMAIL_REGEX.test(email.trim().toLowerCase());
+      const valid = EMAIL_REGEX.test(email.trim().toLowerCase());
       setIsEmailValid(valid);
       if (!valid && emailTouched) {
-        setErrorMessage('Official institution email required. Must end with @nie.ac.in');
+        setErrorMessage('Please enter a valid email address.');
       } else {
         setErrorMessage('');
       }
@@ -55,7 +56,7 @@ export const StudentAuthModal: React.FC<StudentAuthModalProps> = ({
   }, [email, emailTouched]);
 
   useEffect(() => {
-    let interval: NodeJS.Timeout;
+    let interval: ReturnType<typeof setInterval>;
     if (step === 'otp' && timer > 0) {
       interval = setInterval(() => setTimer((prev) => prev - 1), 1000);
     }
@@ -64,7 +65,56 @@ export const StudentAuthModal: React.FC<StudentAuthModalProps> = ({
 
   if (!isOpen) return null;
 
-  const handleSendCode = (e: React.FormEvent) => {
+  const sendOtpRequest = async () => {
+    setErrorMessage('');
+    setInfoMessage('');
+    setIsSendingCode(true);
+
+    const targetEmail = email.trim().toLowerCase();
+
+    try {
+      // First try relative path (proxied by Vite)
+      let res = await fetch('/api/auth/verify-email', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: targetEmail }),
+      }).catch(() => null);
+
+      // If relative failed or wasn't reachable, try direct localhost backend
+      if (!res || !res.ok) {
+        const fallbackRes = await fetch('http://127.0.0.1:8000/api/auth/verify-email', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: targetEmail }),
+        }).catch(() => null);
+
+        if (fallbackRes) {
+          res = fallbackRes;
+        }
+      }
+
+      if (!res) {
+        throw new Error('Unable to connect to backend server. Please verify backend is running on port 8000.');
+      }
+
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data.detail || 'Failed to dispatch verification email.');
+      }
+
+      setOtp(['', '', '', '', '', '']);
+      setStep('otp');
+      setTimer(60);
+      setInfoMessage(`Verification code sent to ${targetEmail}. Please check your inbox and spam folder.`);
+      setTimeout(() => otpInputRefs.current[0]?.focus(), 100);
+    } catch (err: any) {
+      setErrorMessage(err.message || 'Error sending verification code.');
+    } finally {
+      setIsSendingCode(false);
+    }
+  };
+
+  const handleSendCode = async (e: React.FormEvent) => {
     e.preventDefault();
     setEmailTouched(true);
 
@@ -80,18 +130,12 @@ export const StudentAuthModal: React.FC<StudentAuthModalProps> = ({
       setErrorMessage('Please provide a valid 10-digit mobile number.');
       return;
     }
-
     if (!isEmailValid) {
-      setErrorMessage('Strict Check Failed: Email must match official format name@nie.ac.in');
+      setErrorMessage('Please enter a valid email address.');
       return;
     }
 
-    setIsSendingCode(true);
-    setTimeout(() => {
-      setIsSendingCode(false);
-      setStep('otp');
-      setTimer(30);
-    }, 700);
+    await sendOtpRequest();
   };
 
   const handleOtpChange = (index: number, value: string) => {
@@ -112,17 +156,70 @@ export const StudentAuthModal: React.FC<StudentAuthModalProps> = ({
     }
   };
 
-  const handleVerifyOtp = () => {
-    const code = otp.join('');
+  const handleOtpPaste = (e: React.ClipboardEvent<HTMLInputElement>) => {
+    e.preventDefault();
+    const pasted = e.clipboardData.getData('text').replace(/\D/g, '').slice(0, 6);
+    if (!pasted) return;
+
+    const nextOtp = ['', '', '', '', '', ''];
+    for (let i = 0; i < pasted.length; i++) {
+      nextOtp[i] = pasted[i];
+    }
+    setOtp(nextOtp);
+
+    const targetIdx = Math.min(pasted.length, 5);
+    otpInputRefs.current[targetIdx]?.focus();
+  };
+
+  const handleVerifyOtp = async () => {
+    const code = otp.join('').trim();
     if (code.length < 6) {
-      setErrorMessage('Please enter the complete 6-digit OTP.');
+      setErrorMessage('Please enter the complete 6-digit verification code sent to your email.');
       return;
     }
 
+    setErrorMessage('');
     setIsVerifying(true);
-    setTimeout(() => {
-      setIsVerifying(false);
+
+    const payload = {
+      full_name: fullName.trim(),
+      usn: usn.trim().toUpperCase(),
+      branch,
+      mobile: mobile.trim(),
+      email: email.trim().toLowerCase(),
+      otp_code: code,
+    };
+
+    try {
+      let res = await fetch('/api/auth/verify-otp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      }).catch(() => null);
+
+      if (!res || !res.ok) {
+        const fallbackRes = await fetch('http://127.0.0.1:8000/api/auth/verify-otp', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        }).catch(() => null);
+
+        if (fallbackRes) {
+          res = fallbackRes;
+        }
+      }
+
+      if (!res) {
+        throw new Error('Unable to connect to backend server. Please verify backend is running on port 8000.');
+      }
+
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data.detail || 'Invalid or expired verification code.');
+      }
+
       onVerified({
+        id: data.student.id,
         fullName: fullName.trim(),
         usn: usn.trim().toUpperCase(),
         branch,
@@ -130,19 +227,11 @@ export const StudentAuthModal: React.FC<StudentAuthModalProps> = ({
         email: email.trim().toLowerCase(),
       });
       onClose();
-    }, 600);
-  };
-
-  // Demo shortcut for evaluation
-  const fillSampleStudent = () => {
-    setFullName('Sagar N Mutalik');
-    setUsn('4NI23IS175');
-    setBranch('ISE');
-    setMobile('+91 98451 23456');
-    setEmail('2023is_sagarmutalik_c@nie.ac.in');
-    setEmailTouched(true);
-    setIsEmailValid(true);
-    setErrorMessage('');
+    } catch (err: any) {
+      setErrorMessage(err.message || 'Verification failed. Please check the code sent to your email.');
+    } finally {
+      setIsVerifying(false);
+    }
   };
 
   return (
@@ -170,30 +259,21 @@ export const StudentAuthModal: React.FC<StudentAuthModalProps> = ({
               NIE Student Gate
             </span>
             <h3 className="text-2xl sm:text-3xl font-serif text-white tracking-tight mt-1">
-              {step === 'details' ? 'Claim your moment.' : 'Verify your email.'}
+              {step === 'details' ? 'Claim your moment.' : 'Enter Verification Code'}
             </h3>
             <p className="text-xs sm:text-sm text-slate-400 mt-1.5 leading-relaxed">
               {step === 'details' 
                 ? 'Verify your official student identity. Exactly one pass per student. One unforgettable night.'
-                : `We sent a 6-digit one-time access passcode to ${email}.`
+                : `Enter the 6-digit passcode sent to ${email}. Check your inbox and spam folder.`
               }
             </p>
           </div>
 
-          {/* Quick Demo Pre-fill Pill (For grading convenience) */}
-          {step === 'details' && (
-            <div className="mb-5 flex items-center justify-between p-2.5 rounded-lg bg-blue-950/40 border border-blue-500/20 text-xs">
-              <span className="text-blue-300 flex items-center gap-1.5">
-                <Sparkles className="w-3.5 h-3.5 text-amber-400" />
-                <span>Testing NIE verification?</span>
-              </span>
-              <button
-                type="button"
-                onClick={fillSampleStudent}
-                className="text-xs font-semibold px-2.5 py-1 rounded bg-blue-600/30 hover:bg-blue-600/50 text-blue-200 border border-blue-400/30 transition-all cursor-pointer"
-              >
-                Auto-fill Student Info
-              </button>
+          {/* Info Banner */}
+          {infoMessage && (
+            <div className="mb-5 flex items-center gap-2 p-3 rounded-lg bg-emerald-950/60 border border-emerald-500/30 text-emerald-200 text-xs animate-in fade-in">
+              <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+              <span>{infoMessage}</span>
             </div>
           )}
 
@@ -221,23 +301,23 @@ export const StudentAuthModal: React.FC<StudentAuthModalProps> = ({
                     required
                     value={fullName}
                     onChange={(e) => setFullName(e.target.value)}
-                    placeholder="e.g. Sagar N Mutalik"
-                    className="w-full px-3.5 py-2.5 rounded-lg bg-slate-900/90 border border-slate-700/80 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 text-white placeholder-slate-500 text-sm outline-none transition-all"
+                    placeholder="Sagar N Mutalik"
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-slate-900/90 border border-slate-700/80 focus:border-amber-400 focus:ring-1 focus:ring-amber-400 text-white placeholder-slate-500 text-sm outline-none transition-all shadow-inner"
                   />
                 </div>
 
                 {/* USN */}
                 <div>
                   <label className="block text-[11px] font-semibold uppercase tracking-wider text-slate-300 mb-1.5">
-                    USN
+                    NIE USN
                   </label>
                   <input
                     type="text"
                     required
                     value={usn}
                     onChange={(e) => setUsn(e.target.value.toUpperCase())}
-                    placeholder="e.g. 4NI23IS175"
-                    className="w-full px-3.5 py-2.5 rounded-lg bg-slate-900/90 border border-slate-700/80 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 text-white placeholder-slate-500 text-sm uppercase outline-none transition-all"
+                    placeholder="4NI23IS175"
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-slate-900/90 border border-slate-700/80 focus:border-amber-400 focus:ring-1 focus:ring-amber-400 text-white placeholder-slate-500 text-sm uppercase font-mono outline-none transition-all shadow-inner"
                   />
                 </div>
 
@@ -245,6 +325,26 @@ export const StudentAuthModal: React.FC<StudentAuthModalProps> = ({
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 
+                {/* Branch */}
+                <div>
+                  <label className="block text-[11px] font-semibold uppercase tracking-wider text-slate-300 mb-1.5">
+                    Academic Branch
+                  </label>
+                  <select
+                    value={branch}
+                    onChange={(e) => setBranch(e.target.value as Branch)}
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-slate-900/90 border border-slate-700/80 focus:border-amber-400 focus:ring-1 focus:ring-amber-400 text-white text-sm outline-none transition-all shadow-inner cursor-pointer"
+                  >
+                    <option value="ISE">Information Science & Engg (ISE)</option>
+                    <option value="CSE">Computer Science & Engg (CSE)</option>
+                    <option value="AIML">Artificial Intelligence & ML (AIML)</option>
+                    <option value="ECE">Electronics & Communication (ECE)</option>
+                    <option value="EEE">Electrical & Electronics (EEE)</option>
+                    <option value="MECH">Mechanical Engineering (MECH)</option>
+                    <option value="CIVIL">Civil Engineering (CIVIL)</option>
+                  </select>
+                </div>
+
                 {/* Mobile */}
                 <div>
                   <label className="block text-[11px] font-semibold uppercase tracking-wider text-slate-300 mb-1.5">
@@ -256,48 +356,27 @@ export const StudentAuthModal: React.FC<StudentAuthModalProps> = ({
                     value={mobile}
                     onChange={(e) => setMobile(e.target.value)}
                     placeholder="+91 98451 23456"
-                    className="w-full px-3.5 py-2.5 rounded-lg bg-slate-900/90 border border-slate-700/80 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 text-white placeholder-slate-500 text-sm outline-none transition-all"
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-slate-900/90 border border-slate-700/80 focus:border-amber-400 focus:ring-1 focus:ring-amber-400 text-white placeholder-slate-500 text-sm outline-none transition-all shadow-inner"
                   />
-                </div>
-
-                {/* Branch */}
-                <div>
-                  <label className="block text-[11px] font-semibold uppercase tracking-wider text-slate-300 mb-1.5">
-                    Branch
-                  </label>
-                  <select
-                    value={branch}
-                    onChange={(e) => setBranch(e.target.value as Branch)}
-                    className="w-full px-3.5 py-2.5 rounded-lg bg-slate-900/90 border border-slate-700/80 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 text-white text-sm outline-none transition-all cursor-pointer"
-                  >
-                    <option value="ISE">Information Science (ISE)</option>
-                    <option value="CSE">Computer Science (CSE)</option>
-                    <option value="AIML">AI & Machine Learning (AIML)</option>
-                    <option value="AIDS">AI & Data Science (AIDS)</option>
-                    <option value="ECE">Electronics & Communication (ECE)</option>
-                    <option value="EEE">Electrical & Electronics (EEE)</option>
-                    <option value="MECH">Mechanical Engineering (MECH)</option>
-                    <option value="CIVIL">Civil Engineering (CIVIL)</option>
-                  </select>
                 </div>
 
               </div>
 
-              {/* Official NIE Email with Live Strict Regex Validation */}
+              {/* Institution Email */}
               <div>
                 <div className="flex items-center justify-between mb-1.5">
                   <label className="block text-[11px] font-semibold uppercase tracking-wider text-slate-300">
-                    Official NIE Email
+                    Email Address
                   </label>
-                  {email && (
-                    <span className="text-[10px] font-mono">
+                  {emailTouched && (
+                    <span className="text-[10px] flex items-center gap-1">
                       {isEmailValid ? (
-                        <span className="text-emerald-400 flex items-center gap-1 font-semibold">
-                          <CheckCircle2 className="w-3 h-3" /> Valid NIE Domain
+                        <span className="text-emerald-400 flex items-center gap-1 font-medium">
+                          <CheckCircle2 className="w-3 h-3" /> Valid format
                         </span>
                       ) : (
-                        <span className="text-amber-400 font-semibold">
-                          Must be @nie.ac.in
+                        <span className="text-amber-400 font-medium">
+                          Valid email required
                         </span>
                       )}
                     </span>
@@ -305,38 +384,34 @@ export const StudentAuthModal: React.FC<StudentAuthModalProps> = ({
                 </div>
 
                 <div className="relative">
+                  <Mail className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
                   <input
                     type="email"
                     required
                     value={email}
+                    onChange={(e) => setEmail(e.target.value)}
                     onBlur={() => setEmailTouched(true)}
-                    onChange={(e) => {
-                      setEmail(e.target.value);
-                      setEmailTouched(true);
-                    }}
-                    placeholder="name@nie.ac.in"
-                    className={`w-full px-3.5 py-2.5 rounded-lg bg-slate-900/90 border text-white placeholder-slate-500 text-sm outline-none transition-all ${
-                      emailTouched && !isEmailValid && email.length > 0
-                        ? 'border-red-500 focus:ring-1 focus:ring-red-500'
-                        : isEmailValid
-                        ? 'border-emerald-500/80 focus:ring-1 focus:ring-emerald-500'
-                        : 'border-slate-700/80 focus:border-blue-500 focus:ring-1 focus:ring-blue-500'
+                    placeholder="student@nie.ac.in"
+                    className={`w-full pl-10 pr-3.5 py-2.5 rounded-xl bg-slate-900/90 border text-white placeholder-slate-500 text-sm outline-none transition-all shadow-inner ${
+                      emailTouched
+                        ? isEmailValid
+                          ? 'border-emerald-500/60 focus:border-emerald-400'
+                          : 'border-red-500/60 focus:border-red-400'
+                        : 'border-slate-700/80 focus:border-amber-400 focus:ring-1 focus:ring-amber-400'
                     }`}
                   />
-                  <div className="absolute right-3 top-3 text-slate-500">
-                    <Mail className="w-4 h-4" />
-                  </div>
                 </div>
-
                 <p className="text-[11px] text-slate-400 mt-1">
-                  Enforces regex: <code className="text-amber-300 font-mono">^[\w\.-]+@nie\.ac\.in$</code>
+                  The verification code will be sent to this email address.
                 </p>
               </div>
 
-              {/* Single Pass Notice */}
-              <div className="p-3 rounded-lg bg-slate-900/60 border border-slate-800 text-[11px] text-slate-400 flex items-center gap-2">
-                <ShieldCheck className="w-4 h-4 text-blue-400 shrink-0" />
-                <span>Allocation Policy: Strictly 1 non-transferable student pass per verified USN.</span>
+              {/* Security Badge */}
+              <div className="p-3 rounded-xl bg-slate-900/60 border border-slate-800 text-slate-400 text-xs flex items-center gap-2.5">
+                <ShieldCheck className="w-4 h-4 text-[#e6ca65] shrink-0" />
+                <span className="leading-snug">
+                  Strict academic rule: Each email is entitled to exactly 1 non-transferable pass.
+                </span>
               </div>
 
               {/* Submit Button */}
@@ -348,11 +423,11 @@ export const StudentAuthModal: React.FC<StudentAuthModalProps> = ({
                 {isSendingCode ? (
                   <>
                     <RefreshCw className="w-4 h-4 animate-spin" />
-                    <span>Transmitting Verification Code...</span>
+                    <span>Sending Verification Code to Email...</span>
                   </>
                 ) : (
                   <>
-                    <span>Send verification code</span>
+                    <span>Send Verification Code</span>
                     <ArrowRight className="w-4 h-4" />
                   </>
                 )}
@@ -371,10 +446,13 @@ export const StudentAuthModal: React.FC<StudentAuthModalProps> = ({
                     key={idx}
                     ref={(el) => { otpInputRefs.current[idx] = el; }}
                     type="text"
+                    inputMode="numeric"
                     maxLength={1}
                     value={digit}
+                    placeholder="•"
                     onChange={(e) => handleOtpChange(idx, e.target.value)}
                     onKeyDown={(e) => handleOtpKeyDown(idx, e)}
+                    onPaste={handleOtpPaste}
                     className="w-11 h-13 sm:w-12 sm:h-14 text-center text-xl font-bold font-mono rounded-xl bg-slate-900 border border-slate-700 focus:border-amber-400 focus:ring-1 focus:ring-amber-400 text-[#e6ca65] outline-none transition-all shadow-inner"
                   />
                 ))}
@@ -382,22 +460,20 @@ export const StudentAuthModal: React.FC<StudentAuthModalProps> = ({
 
               {/* Resend and Helper */}
               <div className="flex items-center justify-between text-xs text-slate-400">
-                <button
-                  type="button"
-                  onClick={() => setOtp(['8', '4', '9', '2', '0', '1'])}
-                  className="text-[#e6ca65] hover:underline cursor-pointer"
-                >
-                  Quick Insert Code (849201)
-                </button>
+                <span className="text-slate-400">
+                  Didn't receive code?
+                </span>
                 <span>
                   {timer > 0 ? (
                     `Resend code in ${timer}s`
                   ) : (
                     <button 
-                      onClick={() => setTimer(30)}
-                      className="text-blue-400 hover:underline cursor-pointer"
+                      type="button"
+                      disabled={isSendingCode}
+                      onClick={sendOtpRequest}
+                      className="text-blue-400 hover:underline cursor-pointer font-medium"
                     >
-                      Resend OTP now
+                      {isSendingCode ? 'Sending...' : 'Resend code now'}
                     </button>
                   )}
                 </span>
@@ -407,14 +483,14 @@ export const StudentAuthModal: React.FC<StudentAuthModalProps> = ({
               <div className="space-y-2.5 pt-2">
                 <button
                   type="button"
-                  disabled={isVerifying}
+                  disabled={isVerifying || otp.join('').length < 6}
                   onClick={handleVerifyOtp}
-                  className="w-full py-3 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-semibold text-sm transition-all shadow-[0_0_25px_rgba(59,130,246,0.5)] flex items-center justify-center gap-2 cursor-pointer"
+                  className="w-full py-3 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 disabled:from-slate-800 disabled:to-slate-800 disabled:text-slate-500 text-white font-semibold text-sm transition-all shadow-[0_0_25px_rgba(59,130,246,0.5)] flex items-center justify-center gap-2 cursor-pointer disabled:cursor-not-allowed"
                 >
                   {isVerifying ? (
                     <>
                       <RefreshCw className="w-4 h-4 animate-spin" />
-                      <span>Validating Security Token...</span>
+                      <span>Verifying Code...</span>
                     </>
                   ) : (
                     <>
@@ -426,10 +502,14 @@ export const StudentAuthModal: React.FC<StudentAuthModalProps> = ({
 
                 <button
                   type="button"
-                  onClick={() => setStep('details')}
+                  onClick={() => {
+                    setErrorMessage('');
+                    setInfoMessage('');
+                    setStep('details');
+                  }}
                   className="w-full py-2 text-xs text-slate-400 hover:text-slate-200 transition-colors cursor-pointer"
                 >
-                  ← Edit student details or email
+                  ← Edit details or change email
                 </button>
               </div>
 
@@ -442,4 +522,3 @@ export const StudentAuthModal: React.FC<StudentAuthModalProps> = ({
     </div>
   );
 };
-

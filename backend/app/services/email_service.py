@@ -1,28 +1,45 @@
 import os
 import smtplib
+from pathlib import Path
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from dotenv import load_dotenv
 
-SMTP_HOST = os.getenv("SMTP_HOST", "smtp.gmail.com")
-SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
-SMTP_USER = os.getenv("SMTP_USER", "")  # e.g. youremail@gmail.com
-SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")  # e.g. 16-character Google App Password
-SMTP_FROM = os.getenv("SMTP_FROM", SMTP_USER or "arise2026@nie.ac.in")
+# Ensure backend/.env is loaded
+backend_dir = Path(__file__).resolve().parent.parent.parent
+load_dotenv(dotenv_path=backend_dir / ".env")
+load_dotenv()
+
+def get_smtp_settings():
+    # Always reload .env with override=True so changes take effect immediately
+    backend_env = Path(__file__).resolve().parent.parent.parent / ".env"
+    load_dotenv(dotenv_path=backend_env, override=True)
+    load_dotenv(override=True)
+
+    host = os.getenv("SMTP_HOST", "smtp.gmail.com")
+    port = int(os.getenv("SMTP_PORT", "587"))
+    user = os.getenv("SMTP_USER", "").strip()
+    password = os.getenv("SMTP_PASSWORD", "").strip()
+    from_addr = os.getenv("SMTP_FROM", "").strip() or user or "arise2026@nie.ac.in"
+    return host, port, user, password, from_addr
 
 def send_real_otp_email(to_email: str, otp_code: str, student_name: str = "Student") -> tuple[bool, str]:
     """
     Sends actual email with 6-digit OTP code to the student.
-    Uses TLS encryption over port 587.
+    Uses TLS encryption over port 587 (or SSL if port 465).
     """
-    if not SMTP_USER or not SMTP_PASSWORD:
-        print(f"[EMAIL SERVICE WARNING] SMTP_USER or SMTP_PASSWORD not set in .env.")
-        print(f"[OTP DISPATCHED TO CONSOLE] Email: {to_email} | OTP: {otp_code}")
-        return False, "SMTP credentials not configured in backend/.env. Check console for OTP."
+    host, port, user, password, from_addr = get_smtp_settings()
+
+    if not user or not password:
+        warning_msg = "SMTP credentials (SMTP_USER / SMTP_PASSWORD) are not configured in backend/.env."
+        print(f"[EMAIL SERVICE WARNING] {warning_msg}")
+        print(f"[OTP DISPATCHED TO CONSOLE FOR DEV] Email: {to_email} | OTP: {otp_code}")
+        return False, warning_msg
 
     try:
         msg = MIMEMultipart("alternative")
         msg["Subject"] = f"ArISE 2026 Movie Night - Verification Code: {otp_code}"
-        msg["From"] = f"ArISE 2026 <{SMTP_FROM}>"
+        msg["From"] = f"ArISE 2026 <{from_addr}>"
         msg["To"] = to_email
 
         text_body = f"""Hello {student_name},
@@ -75,12 +92,17 @@ The National Institute of Engineering, Mysuru
         msg.attach(MIMEText(text_body, "plain"))
         msg.attach(MIMEText(html_body, "html"))
 
-        server = smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=12)
-        server.ehlo()
-        server.starttls()
-        server.ehlo()
-        server.login(SMTP_USER, SMTP_PASSWORD)
-        server.sendmail(SMTP_FROM, [to_email], msg.as_string())
+        if port == 465:
+            server = smtplib.SMTP_SSL(host, port, timeout=12)
+            server.ehlo()
+        else:
+            server = smtplib.SMTP(host, port, timeout=12)
+            server.ehlo()
+            server.starttls()
+            server.ehlo()
+
+        server.login(user, password)
+        server.sendmail(from_addr, [to_email], msg.as_string())
         server.quit()
 
         print(f"[REAL EMAIL SENT SUCCESSFULLY] Transmitted OTP {otp_code} to {to_email}")
