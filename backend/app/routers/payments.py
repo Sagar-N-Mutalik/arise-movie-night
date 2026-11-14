@@ -1,11 +1,15 @@
-import datetime
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
 from ..database import get_db
-from ..models import Booking, Payment, Ticket
+from ..models import Booking, Payment
 from ..schemas import PaymentVerifyRequest
-from ..services.payment_service import create_razorpay_order, verify_payment
-from ..services.qr_service import generate_secure_ticket_token
+from ..services.payment_service import (
+    confirm_razorpay_payment,
+    create_razorpay_order,
+    fulfill_paid_booking,
+    list_recent_razorpay_payments,
+    verify_payment,
+)
 from ..config import settings
 
 router = APIRouter(prefix="/payments", tags=["Payments"])
@@ -48,6 +52,13 @@ def verify_payment_signature(payload: PaymentVerifyRequest, db: Session = Depend
     if not booking:
         raise HTTPException(status_code=404, detail="Booking not found.")
 
+    payment_row = db.query(Payment).filter(Payment.booking_id == booking.id).first()
+    if payment_row and payment_row.razorpay_order_id != payload.razorpay_order_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Order ID does not match this booking.",
+        )
+
     is_valid = verify_payment(
         payload.razorpay_order_id,
         payload.razorpay_payment_id,
@@ -60,36 +71,19 @@ def verify_payment_signature(payload: PaymentVerifyRequest, db: Session = Depend
             detail="Tampered or invalid Razorpay signature. Payment rejected."
         )
 
-    # Update payment record
-    payment = db.query(Payment).filter(Payment.booking_id == booking.id).first()
-    if payment:
-        payment.razorpay_payment_id = payload.razorpay_payment_id
-        payment.payment_status = "SUCCESS"
-        payment.verified_at = datetime.datetime.utcnow()
-
-    # Confirm booking atomically
-    booking.booking_status = "CONFIRMED"
-
-    # Issue unique Ticket
-    existing_ticket = db.query(Ticket).filter(Ticket.booking_id == booking.id).first()
-    if not existing_ticket:
-        total_tickets = db.query(Ticket).count() + 1
-        ticket_ref = f"NIE26-{str(total_tickets).zfill(6)}"
-        qr_payload, token_hash = generate_secure_ticket_token(ticket_ref)
-
-        new_ticket = Ticket(
-            ticket_reference=ticket_ref,
-            booking_id=booking.id,
-            attendee_student_id=booking.student_id,
-            qr_token_hash=token_hash,
-            ticket_status="CONFIRMED"
+    captured = confirm_razorpay_payment(
+        payload.razorpay_order_id,
+        payload.razorpay_payment_id,
+    )
+    if not captured.get("ok"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=captured.get("error") or "Razorpay payment is not captured.",
         )
-        db.add(new_ticket)
-        db.commit()
-        db.refresh(new_ticket)
-    else:
-        new_ticket = existing_ticket
-        qr_payload = f"{new_ticket.ticket_reference}-SEC-ACTIVE"
+
+    new_ticket, qr_payload = fulfill_paid_booking(
+        db, booking, payload.razorpay_payment_id
+    )
 
     return {
         "status": "PAYMENT_CONFIRMED",
@@ -107,6 +101,41 @@ def verify_payment_signature(payload: PaymentVerifyRequest, db: Session = Depend
             "qr_payload": qr_payload,
             "status": new_ticket.ticket_status,
             "issued_at": new_ticket.booking.created_at.isoformat(),
-        }
+        },
+        "payment_method": captured.get("method"),
+        "upi_vpa": captured.get("vpa"),
+    }
+
+
+@router.get("/recent")
+def recent_payments(count: int = Query(default=10, ge=1, le=50)):
+    """Check recent Razorpay payments (UPI method, status, amount)."""
+    razorpay_items = list_recent_razorpay_payments(count)
+    return {
+        "source": "razorpay",
+        "count": len(razorpay_items),
+        "payments": razorpay_items,
+    }
+
+
+@router.get("/local")
+def local_payments(db: Session = Depends(get_db)):
+    """Check payments recorded in this app's database."""
+    rows = db.query(Payment).order_by(Payment.id.desc()).limit(50).all()
+    return {
+        "source": "local",
+        "count": len(rows),
+        "payments": [
+            {
+                "id": p.id,
+                "booking_id": p.booking_id,
+                "razorpay_order_id": p.razorpay_order_id,
+                "razorpay_payment_id": p.razorpay_payment_id,
+                "amount_inr": p.amount,
+                "status": p.payment_status,
+                "verified_at": p.verified_at.isoformat() if p.verified_at else None,
+            }
+            for p in rows
+        ],
     }
 

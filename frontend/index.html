@@ -321,67 +321,158 @@
       const [emailTouched, setEmailTouched] = useState(false);
       const [isEmailValid, setIsEmailValid] = useState(false);
       const [errorMsg, setErrorMsg] = useState('');
-      const [otp, setOtp] = useState(['8','4','9','2','0','1']);
+      const [infoMsg, setInfoMsg] = useState('');
+      const [otp, setOtp] = useState(['', '', '', '', '', '']);
       const [sendingOtp, setSendingOtp] = useState(false);
+      const [verifyingOtp, setVerifyingOtp] = useState(false);
+      const [timer, setTimer] = useState(60);
 
       useEffect(() => {
         if (email.length > 0) {
-          const valid = NIE_EMAIL_REGEX.test(email.trim().toLowerCase());
+          const valid = /^[\w\.-]+@[\w\.-]+\.[a-zA-Z]{2,}$/.test(email.trim().toLowerCase());
           setIsEmailValid(valid);
           if (!valid && emailTouched) {
-            setErrorMsg('Please enter your official NIE institution email ending with @nie.ac.in');
+            setErrorMsg('Please enter a valid email address.');
           } else {
             setErrorMsg('');
           }
+        } else {
+          setIsEmailValid(false);
+          setErrorMsg('');
         }
       }, [email, emailTouched]);
 
+      useEffect(() => {
+        let interval;
+        if (step === 'otp' && timer > 0) {
+          interval = setInterval(() => setTimer(prev => prev - 1), 1000);
+        }
+        return () => { if (interval) clearInterval(interval); };
+      }, [step, timer]);
+
       if (!isOpen) return null;
 
-      const fillDemo = () => {
-        setFullName('Sagar N Mutalik');
-        setUsn('4NI23IS175');
-        setBranch('ISE');
-        setMobile('+91 98451 23456');
-        setEmail('2023is_sagarmutalik_c@nie.ac.in');
-        setEmailTouched(true);
-        setIsEmailValid(true);
+      const triggerSendEmail = async () => {
         setErrorMsg('');
+        setInfoMsg('');
+        setSendingOtp(true);
+        const cleanEmail = email.trim().toLowerCase();
+
+        try {
+          let res = await fetch('/api/auth/verify-email', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email: cleanEmail })
+          }).catch(() => null);
+
+          if (!res || !res.ok) {
+            const fallbackRes = await fetch('http://127.0.0.1:8000/api/auth/verify-email', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ email: cleanEmail })
+            }).catch(() => null);
+            if (fallbackRes) res = fallbackRes;
+          }
+
+          if (!res) {
+            throw new Error('Could not connect to backend server. Please verify backend is running on port 8000.');
+          }
+
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) {
+            throw new Error(data.detail || 'Failed to dispatch verification email.');
+          }
+
+          setOtp(['', '', '', '', '', '']);
+          setStep('otp');
+          setTimer(60);
+          setInfoMsg(`Verification code sent to ${cleanEmail}. Please check your email inbox and spam folder.`);
+        } catch (err) {
+          setErrorMsg(err.message || 'Error sending verification code.');
+        } finally {
+          setSendingOtp(false);
+        }
       };
 
       const handleSubmitDetails = async (e) => {
         e.preventDefault();
         setEmailTouched(true);
-        if (!fullName || !usn || !mobile || !isEmailValid) {
-          setErrorMsg('Please complete all details with a valid @nie.ac.in email.');
+        if (!fullName.trim() || !usn.trim() || !mobile.trim() || !isEmailValid) {
+          setErrorMsg('Please complete all details with a valid email address.');
+          return;
+        }
+        await triggerSendEmail();
+      };
+
+      const handleConfirmOtp = async () => {
+        const enteredOtp = otp.join('').trim();
+        if (enteredOtp.length < 6) {
+          setErrorMsg('Please enter the complete 6-digit code sent to your email.');
           return;
         }
 
-        setSendingOtp(true);
+        setErrorMsg('');
+        setVerifyingOtp(true);
+
+        const payload = {
+          full_name: fullName.trim(),
+          usn: usn.trim().toUpperCase(),
+          branch: branch,
+          mobile: mobile.trim(),
+          email: email.trim().toLowerCase(),
+          otp_code: enteredOtp
+        };
+
         try {
-          // Attempt dispatch through real FastAPI backend if available
-          await fetch('http://localhost:8000/api/auth/verify-email', {
+          let res = await fetch('/api/auth/verify-otp', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ email: email.trim().toLowerCase() })
+            body: JSON.stringify(payload)
+          }).catch(() => null);
+
+          if (!res || !res.ok) {
+            const fallbackRes = await fetch('http://127.0.0.1:8000/api/auth/verify-otp', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(payload)
+            }).catch(() => null);
+            if (fallbackRes) res = fallbackRes;
+          }
+
+          if (!res) {
+            throw new Error('Could not connect to backend server. Please verify backend is running on port 8000.');
+          }
+
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) {
+            throw new Error(data.detail || 'Invalid verification code. Please check the code sent to your email.');
+          }
+
+          onVerified({
+            id: data.student.id,
+            fullName: fullName.trim(),
+            usn: usn.trim().toUpperCase(),
+            branch,
+            mobile: mobile.trim(),
+            email: email.trim().toLowerCase()
           });
+          onClose();
         } catch (err) {
-          // Fallback to local dispatch
+          setErrorMsg(err.message || 'Verification failed. Please check the code sent to your email.');
         } finally {
-          setSendingOtp(false);
-          setStep('otp');
+          setVerifyingOtp(false);
         }
       };
 
-      const handleConfirmOtp = () => {
-        onVerified({
-          fullName,
-          usn: usn.toUpperCase(),
-          branch,
-          mobile,
-          email: email.toLowerCase()
-        });
-        onClose();
+      const handlePasteOtp = (e) => {
+        e.preventDefault();
+        const text = e.clipboardData.getData('text').replace(/\D/g, '').slice(0, 6);
+        if (!text) return;
+        const next = ['', '', '', '', '', ''];
+        for (let i = 0; i < text.length; i++) {
+          next[i] = text[i];
+        }
+        setOtp(next);
       };
 
       return (
@@ -404,26 +495,19 @@
                   ArISE 2026 Student Admission Gate
                 </span>
                 <h3 className="text-3xl font-serif font-bold text-white mt-1">
-                  {step === 'details' ? 'Claim your moment.' : 'Verify your email.'}
+                  {step === 'details' ? 'Claim your moment.' : 'Enter Verification Code'}
                 </h3>
                 <p className="text-xs text-slate-400 mt-1 leading-relaxed">
                   {step === 'details' 
                     ? 'Verify your official student identity. Strictly one pass per student.' 
-                    : `We sent a 6-digit one-time access passcode to ${email}.`
+                    : `Enter the 6-digit passcode sent to ${email}. Check your inbox and spam folder.`
                   }
                 </p>
               </div>
 
-              {step === 'details' && (
-                <div className="flex items-center justify-between p-2.5 rounded-xl bg-blue-950/40 border border-blue-500/20 text-xs">
-                  <span className="text-blue-300 font-medium">Quick student entry helper:</span>
-                  <button 
-                    type="button" 
-                    onClick={fillDemo}
-                    className="px-3 py-1 rounded-lg bg-blue-600/30 hover:bg-blue-600/50 text-blue-200 border border-blue-400/30 text-xs font-semibold cursor-pointer"
-                  >
-                    Auto-fill Student Info
-                  </button>
+              {infoMsg && (
+                <div className="p-3 rounded-xl bg-emerald-950/60 border border-emerald-500/30 text-emerald-200 text-xs">
+                  {infoMsg}
                 </div>
               )}
 
@@ -500,15 +584,15 @@
                     </div>
                   </div>
 
-                  {/* Field Label: "Your NIE mail ID" with NO technical regex text below */}
+                  {/* Field Label: "Email Address" */}
                   <div>
                     <div className="flex justify-between items-center mb-1.5">
                       <label className="block text-slate-300 font-semibold uppercase tracking-wider text-[10px]">
-                        Your NIE mail ID
+                        Email Address
                       </label>
                       {email && isEmailValid && (
                         <span className="text-[10px] text-emerald-400 font-semibold font-mono">
-                          Verified NIE Domain
+                          Valid Email
                         </span>
                       )}
                     </div>
@@ -518,11 +602,14 @@
                       value={email}
                       onBlur={() => setEmailTouched(true)}
                       onChange={e => { setEmail(e.target.value); setEmailTouched(true); }}
-                      placeholder="name@nie.ac.in"
+                      placeholder="student@nie.ac.in"
                       className={`w-full px-3.5 py-2.5 rounded-xl bg-slate-900/90 border text-white placeholder-slate-500 outline-none transition-all ${
                         emailTouched && !isEmailValid ? 'border-red-500' : isEmailValid ? 'border-emerald-500/80' : 'border-slate-700/80'
                       }`}
                     />
+                    <p className="text-[10px] text-slate-400 mt-1">
+                      Verification code will be sent to this email address.
+                    </p>
                   </div>
 
                   <div className="p-3 rounded-xl bg-slate-900/60 border border-slate-800 text-[11px] text-slate-400">
@@ -534,7 +621,7 @@
                     disabled={!isEmailValid || sendingOtp}
                     className="w-full py-3.5 rounded-xl bg-blue-600 hover:bg-blue-500 disabled:bg-slate-800 disabled:text-slate-500 text-white font-bold text-xs uppercase tracking-wider shadow-lg transition-all cursor-pointer"
                   >
-                    {sendingOtp ? 'Sending verification code...' : 'Send verification code'}
+                    {sendingOtp ? 'Sending verification code to email...' : 'Send verification code'}
                   </button>
                 </form>
               ) : (
@@ -544,12 +631,24 @@
                       <input
                         key={idx}
                         type="text"
+                        inputMode="numeric"
                         maxLength={1}
                         value={digit}
+                        placeholder="•"
+                        onPaste={handlePasteOtp}
                         onChange={e => {
+                          const val = e.target.value.replace(/\D/g, '');
                           const next = [...otp];
-                          next[idx] = e.target.value.slice(-1);
+                          next[idx] = val.slice(-1);
                           setOtp(next);
+                          if (val && e.target.nextElementSibling) {
+                            e.target.nextElementSibling.focus();
+                          }
+                        }}
+                        onKeyDown={e => {
+                          if (e.key === 'Backspace' && !otp[idx] && e.target.previousElementSibling) {
+                            e.target.previousElementSibling.focus();
+                          }
                         }}
                         className="w-11 h-13 sm:w-12 sm:h-14 text-center text-xl font-bold font-mono rounded-xl bg-slate-900 border border-slate-700 text-[#e6ca65] outline-none focus:border-amber-400"
                       />
@@ -557,28 +656,41 @@
                   </div>
 
                   <div className="flex justify-between items-center text-xs text-slate-400">
-                    <span 
-                      className="text-[#e6ca65] hover:underline cursor-pointer" 
-                      onClick={() => setOtp(['8','4','9','2','0','1'])}
-                    >
-                      Demo code: 849201
+                    <span>Didn't receive code?</span>
+                    <span>
+                      {timer > 0 ? (
+                        `Resend code in ${timer}s`
+                      ) : (
+                        <button
+                          type="button"
+                          disabled={sendingOtp}
+                          onClick={triggerSendEmail}
+                          className="text-blue-400 hover:underline cursor-pointer font-medium"
+                        >
+                          {sendingOtp ? 'Sending...' : 'Resend code now'}
+                        </button>
+                      )}
                     </span>
-                    <span>Resend code in 24s</span>
                   </div>
 
                   <button
                     onClick={handleConfirmOtp}
-                    className="w-full py-3.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs uppercase tracking-wider shadow-lg cursor-pointer"
+                    disabled={verifyingOtp || otp.join('').length < 6}
+                    className="w-full py-3.5 rounded-xl bg-blue-600 hover:bg-blue-500 disabled:bg-slate-800 disabled:text-slate-500 text-white font-bold text-xs uppercase tracking-wider shadow-lg cursor-pointer"
                   >
-                    Verify Identity & Proceed to Checkout
+                    {verifyingOtp ? 'Verifying Code...' : 'Verify Code & Proceed to Checkout'}
                   </button>
 
                   <button
                     type="button"
-                    onClick={() => setStep('details')}
-                    className="w-full text-center text-xs text-slate-400 hover:text-white"
+                    onClick={() => {
+                      setErrorMsg('');
+                      setInfoMsg('');
+                      setStep('details');
+                    }}
+                    className="w-full text-center text-xs text-slate-400 hover:text-white cursor-pointer"
                   >
-                    Edit student information
+                    ← Edit student information or email
                   </button>
                 </div>
               )}
@@ -589,34 +701,123 @@
       );
     }
 
-    // 2. CHECKOUT VIEW (EMOJI-FREE)
+    // 2. CHECKOUT VIEW — Real Razorpay Integration
     function CheckoutView({ student, onBack, onSuccess }) {
       const [processing, setProcessing] = useState(false);
+      const [errorMsg, setErrorMsg] = useState('');
+      const TICKET_PRICE = 49;
+      const API_BASE = 'http://127.0.0.1:8000';
 
-      const triggerPayment = () => {
+      const triggerPayment = async () => {
         setProcessing(true);
-        setTimeout(() => {
-          setProcessing(false);
-          const seq = Math.floor(100000 + Math.random() * 900000);
-          const ticketId = `NIE26-000001`;
-          const newTicket = {
-            ticketId,
-            bookingId: `BK-${seq}`,
-            fullName: student.fullName,
-            usn: student.usn,
-            branch: student.branch,
-            email: student.email,
-            mobile: student.mobile,
-            eventName: 'ArISE 2026 Movie Night',
-            eventDate: '18 Nov 2026 · 6:00 PM IST',
-            venue: 'Diamond Jubilee Complex · South Campus, NIE Mysuru',
-            amount: 149,
-            qrPayload: `${ticketId}-SEC-${Math.random().toString(16).substring(2, 8).toUpperCase()}`,
-            status: 'CONFIRMED',
-            issuedAt: new Date().toISOString()
+        setErrorMsg('');
+
+        try {
+          // Step 1: Create booking
+          const bookingRes = await fetch(`${API_BASE}/api/bookings`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ student_id: student.id }),
+          });
+          if (!bookingRes.ok) {
+            const e = await bookingRes.json().catch(() => ({}));
+            throw new Error(e.detail || 'Failed to create booking.');
+          }
+          const booking = await bookingRes.json();
+          const bookingReference = booking.booking_reference;
+
+          // Step 2: Create Razorpay order
+          const orderRes = await fetch(`${API_BASE}/api/payments/create-order?booking_reference=${bookingReference}`, {
+            method: 'POST',
+          });
+          if (!orderRes.ok) {
+            const e = await orderRes.json().catch(() => ({}));
+            throw new Error(e.detail || 'Failed to create payment order.');
+          }
+          const orderData = await orderRes.json();
+
+          // Step 3: Load Razorpay SDK if not present
+          if (!window.Razorpay) {
+            await new Promise((resolve, reject) => {
+              const script = document.createElement('script');
+              script.src = 'https://checkout.razorpay.com/v1/checkout.js';
+              script.onload = resolve;
+              script.onerror = () => reject(new Error('Failed to load Razorpay SDK. Check your connection.'));
+              document.head.appendChild(script);
+            });
+          }
+
+          // Step 4: Open Razorpay Checkout
+          const rzpOptions = {
+            key: orderData.key_id || '',
+            amount: orderData.amount,
+            currency: 'INR',
+            name: 'ArISE 2026 Movie Night',
+            description: 'Student Admission Pass · NIE Mysuru',
+            order_id: orderData.order_id,
+            prefill: {
+              name: student.fullName,
+              email: student.email,
+              contact: student.mobile || '',
+            },
+            theme: { color: '#2563eb' },
+
+            handler: async (response) => {
+              // Step 5: Verify payment on backend
+              try {
+                const verifyRes = await fetch(`${API_BASE}/api/payments/verify`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    booking_reference: bookingReference,
+                    razorpay_order_id: response.razorpay_order_id,
+                    razorpay_payment_id: response.razorpay_payment_id,
+                    razorpay_signature: response.razorpay_signature,
+                  }),
+                });
+                if (!verifyRes.ok) {
+                  const e = await verifyRes.json().catch(() => ({}));
+                  throw new Error(e.detail || 'Payment verification failed.');
+                }
+                const result = await verifyRes.json();
+                const t = result.ticket;
+                onSuccess({
+                  ticketId: t.ticket_id,
+                  bookingId: t.booking_id,
+                  fullName: t.full_name,
+                  usn: t.usn,
+                  branch: t.branch,
+                  email: t.email,
+                  mobile: student.mobile,
+                  eventName: t.event_name,
+                  eventDate: t.event_date,
+                  venue: t.venue,
+                  amount: t.amount,
+                  qrPayload: t.qr_payload,
+                  status: t.status,
+                  issuedAt: t.issued_at,
+                });
+              } catch (err) {
+                setErrorMsg(`Payment verification failed: ${err.message}`);
+                setProcessing(false);
+              }
+            },
+
+            modal: {
+              ondismiss: () => {
+                setProcessing(false);
+                setErrorMsg('Payment was cancelled.');
+              },
+            },
           };
-          onSuccess(newTicket);
-        }, 750);
+
+          const rzp = new window.Razorpay(rzpOptions);
+          rzp.open();
+
+        } catch (err) {
+          setErrorMsg(err.message || 'Payment failed. Please try again.');
+          setProcessing(false);
+        }
       };
 
       return (
@@ -630,6 +831,12 @@
           <p className="text-xs text-slate-400 mt-2 mb-8">
             Your identity is verified. Review details before completing payment.
           </p>
+
+          {errorMsg && (
+            <div className="mb-6 p-4 rounded-xl bg-red-950/40 border border-red-500/40 text-sm text-red-300">
+              {errorMsg}
+            </div>
+          )}
 
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
             <div className="lg:col-span-7 space-y-4">
@@ -657,7 +864,7 @@
                 <div className="space-y-3 text-xs">
                   <div className="flex justify-between text-slate-300">
                     <span>Student pass x 1 (Hard Limit)</span>
-                    <span className="font-semibold text-white">INR 149</span>
+                    <span className="font-semibold text-white">INR {TICKET_PRICE}</span>
                   </div>
                   <div className="flex justify-between text-slate-400">
                     <span>Platform fee</span>
@@ -665,18 +872,18 @@
                   </div>
                   <div className="pt-3 border-t border-slate-800 flex justify-between items-baseline">
                     <span className="text-sm font-semibold text-white">Total payable</span>
-                    <span className="text-3xl font-serif font-bold text-[#e6ca65]">INR 149</span>
+                    <span className="text-3xl font-serif font-bold text-[#e6ca65]">INR {TICKET_PRICE}</span>
                   </div>
                 </div>
 
                 <button
                   onClick={triggerPayment}
                   disabled={processing}
-                  className="w-full py-3.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs uppercase tracking-wider shadow-lg transition-all cursor-pointer"
+                  className="w-full py-3.5 rounded-xl bg-blue-600 hover:bg-blue-500 disabled:opacity-70 text-white font-bold text-xs uppercase tracking-wider shadow-lg transition-all cursor-pointer"
                 >
-                  {processing ? 'Connecting Razorpay Gateway...' : 'Pay via Razorpay (INR 149)'}
+                  {processing ? 'Opening Razorpay...' : `Pay INR ${TICKET_PRICE} via Razorpay`}
                 </button>
-                <div className="text-[10px] text-slate-400 text-center">Payment verification endpoint ready</div>
+                <div className="text-[10px] text-slate-400 text-center">256-bit encrypted · Powered by Razorpay</div>
               </div>
             </div>
           </div>
@@ -891,7 +1098,7 @@
 
           pdf.setFont('helvetica', 'bold');
           pdf.setTextColor(52, 211, 153);
-          pdf.text('INR 149.00', leftX + 86, 100);
+          pdf.text('INR 49.00', leftX + 86, 100);
 
           // Row 4: Venue & Admission Notes Box (y = 106 to 127)
           pdf.setFillColor(10, 16, 31);

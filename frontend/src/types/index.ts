@@ -9,6 +9,7 @@ export type Branch =
   | 'AIDS';
 
 export interface StudentAuthData {
+  id: number;          // Backend student.id — required to create booking
   fullName: string;
   usn: string;
   email: string;

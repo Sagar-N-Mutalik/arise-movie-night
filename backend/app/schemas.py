@@ -10,7 +10,7 @@ class EmailVerifyRequest(BaseModel):
     def validate_nie_email(cls, v: str) -> str:
         clean_email = v.strip().lower()
         if not re.match(settings.EMAIL_REGEX_PATTERN, clean_email):
-            raise ValueError("Email must be an official institution ID ending with @nie.ac.in")
+            raise ValueError(f"Invalid email address: '{clean_email}'. Please provide a valid email.")
         return clean_email
 
 
@@ -26,7 +26,7 @@ class OTPVerifyRequest(BaseModel):
     def validate_nie_email(cls, v: str) -> str:
         clean_email = v.strip().lower()
         if not re.match(settings.EMAIL_REGEX_PATTERN, clean_email):
-            raise ValueError("Email must be an official institution ID ending with @nie.ac.in")
+            raise ValueError(f"Invalid email address: '{clean_email}'. Please provide a valid email.")
         return clean_email
 
     @field_validator("usn")
